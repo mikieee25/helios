@@ -20,7 +20,7 @@ export function SeriesToggle() {
   return (
     <div className="seg">
       <button className={series === 'dl' ? 'on' : ''} onClick={() => useStore.getState().setSeries('dl')}><i style={{ background: 'var(--cy)' }} />Download</button>
-      <button className={series === 'ul' ? 'on' : ''} onClick={() => useStore.getState().setSeries('ul')}><i style={{ background: 'var(--pu)' }} />Upload</button>
+      <button className={series === 'ul' ? 'on' : ''} onClick={() => useStore.getState().setSeries('ul')}><i style={{ background: 'var(--upload)' }} />Upload</button>
     </div>
   )
 }
@@ -30,9 +30,9 @@ export default function Chart() {
 
   useEffect(() => {
     const svg = ref.current!
-    const c = 'stop-color:color-mix(in srgb,var(--pu) var(--mix),var(--cy))'
+    const c = 'stop-color:color-mix(in srgb,var(--upload) var(--mix),var(--cy))'
     svg.style.setProperty('--mix', '0%')
-    svg.innerHTML = `<defs><linearGradient id="gf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="${c};stop-opacity:.38"/><stop offset="1" style="${c};stop-opacity:0"/></linearGradient><linearGradient id="gs" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${W}" y2="0"><stop offset="0" style="${c}"/><stop offset=".7" style="${c}"/><stop offset="1" stop-color="#d4d4dc"/></linearGradient><radialGradient id="gg"><stop offset="0" style="${c};stop-opacity:.45"/><stop offset="1" style="${c};stop-opacity:0"/></radialGradient></defs><circle id="c-g" r="70" fill="url(#gg)"/><path id="p-f" fill="url(#gf)"/><path id="p-s" fill="none" stroke="url(#gs)" stroke-width="2"/><circle id="c-d" r="5.5" fill="#d4d4dc" stroke="#fff" stroke-opacity=".6" stroke-width="1.5"/>`
+    svg.innerHTML = `<defs><linearGradient id="gf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="${c};stop-opacity:.38"/><stop offset="1" style="${c};stop-opacity:0"/></linearGradient><linearGradient id="gs" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${W}" y2="0"><stop offset="0" style="${c}"/><stop offset=".7" style="${c}"/><stop offset="1" stop-color="var(--chart-line)"/></linearGradient><radialGradient id="gg"><stop offset="0" style="${c};stop-opacity:.45"/><stop offset="1" style="${c};stop-opacity:0"/></radialGradient></defs><circle id="c-g" r="70" fill="url(#gg)"/><path id="p-f" fill="url(#gf)"/><path id="p-s" fill="none" stroke="url(#gs)" stroke-width="2"/><circle id="c-d" r="5.5" fill="var(--chart-line)" stroke="var(--chart-marker-stroke)" stroke-opacity=".6" stroke-width="1.5"/>`
     const q = (id: string) => svg.querySelector(`#${id}`)!
     const [glow, fill, line, dot] = [q('c-g'), q('p-f'), q('p-s'), q('c-d')]
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches

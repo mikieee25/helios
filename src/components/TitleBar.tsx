@@ -9,7 +9,13 @@ export default function TitleBar() {
   return (
     <div className="bar" data-tauri-drag-region>
       <div className="l" data-tauri-drag-region>
-        <svg className="i" viewBox="0 0 24 24" style={{ color: 'var(--cy)' }}><circle cx="6" cy="18" r="2" /><circle cx="18" cy="18" r="2" /><circle cx="12" cy="5" r="2" /><path d="M12 7v6M8 18h8" /></svg>
+        <svg className="i brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false" style={{ color: 'var(--cy)' }}>
+          <path d="M12 7v5m0 0-4.6 4.6M12 12l4.6 4.6" />
+          <circle cx="6" cy="18" r="2" />
+          <circle cx="18" cy="18" r="2" />
+          <circle cx="12" cy="5" r="2" />
+          <circle className="brand-hub" cx="12" cy="12" r="1.4" />
+        </svg>
         <b>HELIOS</b>
       </div>
       <div className="r">

@@ -28,17 +28,19 @@ Paste a link (http, ftp or magnet) anywhere in the window to add a download.
 
 ## Layout
 
-| Path | Job |
-|---|---|
-| `src/lib/aria2.ts` | WebSocket JSON-RPC client, auto-reconnect, push events |
-| `src/lib/store.ts` | Zustand store: one `system.multicall` per second, speed history, actions |
-| `src/components/Chart.tsx` | Animated speed chart (requestAnimationFrame, reads the store directly) |
-| `src/components/TaskTable.tsx` | Task list; rows are memoized so only changed tasks re-render |
-| `src-tauri/src/lib.rs` | Starts aria2 as a sidecar, keeps its session file, stops it on exit |
+| Path                           | Job                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------- |
+| `src/lib/aria2.ts`             | WebSocket JSON-RPC client, auto-reconnect, push events                                      |
+| `src/lib/store.ts`             | Zustand store: one `system.multicall` per second, settings, explorer filters, speed history |
+| `src/lib/history.ts`           | Persistent completion history, capped at 5,000 entries                                      |
+| `src/lib/persistence.ts`       | Tauri store with a browser `localStorage` fallback                                          |
+| `src/components/Chart.tsx`     | Animated speed chart (requestAnimationFrame, reads the store directly)                      |
+| `src/components/TaskTable.tsx` | Virtualized task and completion lists; active task rows are memoized                        |
+| `src/components/Settings.tsx`  | Live aria2 speed, concurrency, connection, and download-folder settings                     |
+| `src-tauri/src/lib.rs`         | Starts aria2 with a per-launch secret and loopback port; keeps its session file             |
 
 ## Known gaps
 
-- The RPC secret is the fixed string `helios-dev`. Generate one per launch in `lib.rs` and pass it to the UI before shipping.
-- Completed history is whatever aria2 keeps (up to 100 stopped tasks are fetched). Persist your own history for the "150 completed" case.
-- The task list is not virtualized yet. Add TanStack Virtual once you expect hundreds of rows.
-- Explorer items, Settings and Options are visual only.
+- Include the target-specific aria2 sidecar and generated app icons before building a desktop bundle; see the setup steps above.
+- Completed history is stored separately from aria2's stopped-task list and kept up to 5,000 entries.
+- Explorer categories are inferred from file extensions; torrent folders use the dominant category of their files.

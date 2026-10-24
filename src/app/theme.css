@@ -1,0 +1,49 @@
+:root {
+  --page: #15151b;
+  --bg: #050507;
+  --row: #0d0d12;
+  --sel: #17171f;
+  --line: #1d1d26;
+  --tx: #e9e9f0;
+  --mut: #8c8c9b;
+  --dim: #5f5f6e;
+  --chip: #1b1b23;
+  --seg: #2b2b44;
+  --cy: #4cc3f0;
+  --error: #f87171;
+  --status-seeding: #a66bf0;
+  --status-completed: #4ade80;
+  --upload: #a66bf0;
+  --pa: #6a6a80;
+  --track: #22222c;
+  --chart: #000;
+  --chart-line: #d4d4dc;
+  --chart-marker-stroke: #fff;
+  --window-shadow: 0 30px 80px #0007;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --page: #e8e9f0;
+  --bg: #fff;
+  --row: #f3f4f8;
+  --sel: #e6e8f2;
+  --line: #e2e3ec;
+  --tx: #16161d;
+  --mut: #5a5a6b;
+  --dim: #8d8d9d;
+  --chip: #eceef4;
+  --seg: #d9ddf0;
+  --cy: #1397cc;
+  --error: #dc2626;
+  --status-seeding: #702bb8;
+  --status-completed: #146d3d;
+  --upload: #8a47d8;
+  --pa: #9a9aae;
+  --track: #dcdde6;
+  --chart: #f6f7fb;
+  --chart-line: #5a5a6b;
+  --chart-marker-stroke: #fff;
+  --window-shadow: 0 30px 80px #0002;
+  color-scheme: light;
+}

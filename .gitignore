@@ -1,5 +1,37 @@
+# OS Generated Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor & IDE Directories
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Environment & Secret Files
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Logs & Temporary Data
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.temp/
+.tmp/
+
 node_modules
 .next
+*.tsbuildinfo
 out
 src-tauri/target
 src-tauri/gen
