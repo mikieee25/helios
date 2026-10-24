@@ -8,5 +8,12 @@
     "windows": [{ "title": "Helios", "width": 1240, "height": 820, "minWidth": 900, "minHeight": 600, "decorations": false, "shadow": false }],
     "security": { "csp": null }
   },
-  "bundle": { "active": true, "targets": "all", "externalBin": ["binaries/aria2c"], "icon": ["icons/icon.png"] }
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/aria2c"],
+    "icon": ["icons/icon.png"],
+    "fileAssociations": [{ "ext": ["torrent"], "name": "BitTorrent file", "mimeType": "application/x-bittorrent", "role": "Viewer" }]
+  },
+  "plugins": { "deep-link": { "desktop": { "schemes": ["magnet"] } } }
 }

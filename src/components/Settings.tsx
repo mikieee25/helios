@@ -56,6 +56,7 @@ export default function Settings() {
   const settings = useStore((s) => s.settings);
   const error = useStore((s) => s.settingsError);
   const update = useStore((s) => s.updateSettings);
+  const updateAutostart = useStore((s) => s.updateAutostart);
   const inTauri =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -112,22 +113,40 @@ export default function Settings() {
           }
         />
         {inTauri && (
-          <div className="setting-field folder-field">
-            <span>Download folder</span>
-            <span className="folder-choice">
-              {settings.downloadDir || "Default Downloads folder"}
-              <span>
-                <button onClick={() => void chooseFolder()}>
-                  Choose folder
-                </button>
-                {settings.downloadDir && (
-                  <button onClick={() => void update({ downloadDir: "" })}>
-                    Use default
+          <>
+            <div className="setting-field folder-field">
+              <span>Download folder</span>
+              <span className="folder-choice">
+                {settings.downloadDir || "Default Downloads folder"}
+                <span>
+                  <button onClick={() => void chooseFolder()}>
+                    Choose folder
                   </button>
-                )}
+                  {settings.downloadDir && (
+                    <button onClick={() => void update({ downloadDir: "" })}>
+                      Use default
+                    </button>
+                  )}
+                </span>
               </span>
-            </span>
-          </div>
+            </div>
+            <label className="setting-field setting-check">
+              <span>Close button hides to tray</span>
+              <input
+                type="checkbox"
+                checked={settings.closeToTray}
+                onChange={(event) => void update({ closeToTray: event.target.checked })}
+              />
+            </label>
+            <label className="setting-field setting-check">
+              <span>Start with Windows</span>
+              <input
+                type="checkbox"
+                checked={settings.startWithWindows}
+                onChange={(event) => void updateAutostart(event.target.checked)}
+              />
+            </label>
+          </>
         )}
       </div>
       {error && (

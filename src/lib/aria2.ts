@@ -6,6 +6,7 @@ export class Aria2 {
   private id = 0;
   private pending = new Map<number, Pending>();
   private timer?: ReturnType<typeof setTimeout>;
+  private stopped = false;
 
   constructor(
     private url: string,
@@ -17,6 +18,7 @@ export class Aria2 {
   }
 
   private connect() {
+    if (this.stopped) return;
     const ws = new WebSocket(this.url);
     this.ws = ws;
     ws.onopen = () => {
@@ -36,7 +38,7 @@ export class Aria2 {
       this.onState(false);
       this.pending.forEach((p) => p.rej(new Error("connection closed")));
       this.pending.clear();
-      this.timer = setTimeout(() => this.connect(), 1500);
+      if (!this.stopped) this.timer = setTimeout(() => this.connect(), 1500);
     };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data as string);
@@ -73,8 +75,13 @@ export class Aria2 {
     });
   }
 
-  close() {
+  stopReconnect() {
+    this.stopped = true;
     clearTimeout(this.timer);
+  }
+
+  close() {
+    this.stopReconnect();
     this.ws?.close();
   }
 }

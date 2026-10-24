@@ -533,6 +533,11 @@ svg.i {
   border-radius: 9px;
   background: var(--row);
 }
+.setting-check input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--cy);
+}
 .setting-input {
   display: flex;
   align-items: center;

@@ -37,6 +37,8 @@ export type Settings = {
   maxConcurrent: number;
   connectionsPerServer: number;
   downloadDir: string;
+  closeToTray: boolean;
+  startWithWindows: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -45,6 +47,8 @@ export const DEFAULT_SETTINGS: Settings = {
   maxConcurrent: 5,
   connectionsPerServer: 16,
   downloadDir: "",
+  closeToTray: true,
+  startWithWindows: false,
 };
 export const N = 48;
 export const ARIA2_URL =
@@ -94,8 +98,10 @@ interface S {
   setView(v: "tasks" | "settings"): void;
   setNotify(v: boolean): void;
   updateSettings(settings: Partial<Settings>): Promise<void>;
+  updateAutostart(enabled: boolean): Promise<void>;
   clearHistory(): Promise<void>;
   removeHistory(id: string): Promise<void>;
+  shutdown(): Promise<void>;
   toggle(t: Task): void;
   add(uri: string): void;
   addUris(uris: string[], options?: AddOptions): Promise<string[]>;
@@ -103,12 +109,21 @@ interface S {
   taskUris(gid: string): Promise<string[]>;
   removeTask(task: Task): Promise<void>;
   retryTask(task: Task): Promise<void>;
+  pauseAll(): Promise<void>;
+  resumeAll(): Promise<void>;
 }
 
 let api: Aria2 | undefined;
 let rpcSecret = BROWSER_SECRET;
 let starting: Promise<void> | undefined;
 let busy = false;
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let shutdownRequested = false;
+let shutdownPromise: Promise<void> | undefined;
+let stoppedRevision = 1;
+let loadedStoppedRevision = 0;
+let stoppedCache: Record<string, any>[] = [];
+let refreshTicks = 0;
 let aria2DefaultDir: string | undefined;
 const seen = new Map<string, number>();
 const pendingCompletions = new Set<string>();
@@ -201,28 +216,44 @@ export const useStore = create<S>((set, get) => {
     }
   }
 
-  async function refresh() {
-    if (!api || busy) return;
+  async function refresh(fetchStopped = false) {
+    if (fetchStopped) stoppedRevision++;
+    if (!api || busy || shutdownRequested) return;
     busy = true;
+    const client = api;
+    const requestedStoppedRevision = stoppedRevision;
+    const shouldFetchStopped = requestedStoppedRevision > loadedStoppedRevision;
     try {
       const c = (m: string, ...p: any[]) => ({
         methodName: `aria2.${m}`,
         params: [`token:${rpcSecret}`, ...p],
       });
-      const r = await api.call("system.multicall", [
+      const calls = [
         c("tellActive", KEYS),
         c("tellWaiting", 0, 5000, KEYS),
-        c("tellStopped", 0, 5000, KEYS),
-        c("getGlobalStat"),
-      ]);
+      ];
+      const stoppedIndex = calls.length;
+      if (shouldFetchStopped) calls.push(c("tellStopped", 0, 100, KEYS));
+      const statIndex = calls.length;
+      calls.push(c("getGlobalStat"));
+      const r = await client.call("system.multicall", calls);
+      if (shouldFetchStopped) {
+        stoppedCache = r[stoppedIndex][0];
+        loadedStoppedRevision = requestedStoppedRevision;
+      }
+      const activeWaiting = [...r[0][0], ...r[1][0]];
+      const activeGids = new Set(activeWaiting.map((task: any) => task.gid));
       const old = new Map(get().tasks.map((t) => [t.gid, t]));
-      const tasks = [...r[0][0], ...r[1][0], ...r[2][0]]
+      const tasks = [
+        ...activeWaiting,
+        ...stoppedCache.filter((task) => !activeGids.has(task.gid)),
+      ]
         .map(toTask)
         .map((t) => {
           const o = old.get(t.gid);
           return o && same(o, t) ? o : t;
         });
-      const g = r[3][0];
+      const g = r[statIndex][0];
       const { dlHist, upHist } = get();
       clock.t = performance.now();
       set({
@@ -314,6 +345,7 @@ export const useStore = create<S>((set, get) => {
       url,
       rpcSecret,
       (method, gid) => {
+        if (shutdownRequested) return;
         if (
           (method === "onDownloadComplete" ||
             method === "onBtDownloadComplete") &&
@@ -322,14 +354,27 @@ export const useStore = create<S>((set, get) => {
           pendingCompletions.add(gid);
           flushCompletions(get().tasks);
         }
-        void refresh();
+        const stoppedEvent =
+          method === "onDownloadComplete" ||
+          method === "onBtDownloadComplete" ||
+          method === "onDownloadError" ||
+          method === "onDownloadStop";
+        void refresh(stoppedEvent);
       },
       (online) => {
         set({ online });
-        if (online) void applySettings().then(refresh);
+        if (online && !shutdownRequested)
+          void applySettings().then(() => refresh());
       }
     );
-    setInterval(refresh, 1000);
+    if (shutdownRequested) {
+      api.stopReconnect();
+      return;
+    }
+    refreshTimer = setInterval(() => {
+      refreshTicks++;
+      void refresh(refreshTicks % 5 === 0);
+    }, 1000);
   }
 
   return {
@@ -347,6 +392,7 @@ export const useStore = create<S>((set, get) => {
     dlHist: Array(N + 1).fill(0),
     upHist: Array(N + 1).fill(0),
     start() {
+      if (shutdownRequested) return Promise.resolve();
       if (api) return Promise.resolve();
       if (!starting)
         starting = initialize().finally(() => {
@@ -379,12 +425,56 @@ export const useStore = create<S>((set, get) => {
       await writeValue("settings", settings);
       if (get().online) await applySettings(settings);
     },
+    async updateAutostart(enabled) {
+      try {
+        await invoke("set_autostart", { enabled });
+        const settings = { ...get().settings, startWithWindows: enabled };
+        await writeValue("settings", settings);
+        set({ settings, settingsError: undefined });
+      } catch (error) {
+        set({ settingsError: error instanceof Error ? error.message : String(error) });
+      }
+    },
     async clearHistory() {
       await historyStore.clear();
       set({ history: [] });
     },
     async removeHistory(id) {
       set({ history: await historyStore.remove(id) });
+    },
+    shutdown() {
+      if (shutdownPromise) return shutdownPromise;
+      shutdownRequested = true;
+      if (refreshTimer) clearInterval(refreshTimer);
+      const deadline = Date.now() + 3000;
+      const beforeDeadline = <T,>(promise: Promise<T>) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        return Promise.race([
+          promise,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Shutdown timed out")),
+              Math.max(0, deadline - Date.now())
+            );
+          }),
+        ]).finally(() => {
+          if (timer) clearTimeout(timer);
+        });
+      };
+      shutdownPromise = (async () => {
+        try {
+          if (!api && starting) await beforeDeadline(starting).catch(() => {});
+          const client = api;
+          if (!client) return;
+          await beforeDeadline(client.call("saveSession")).catch(() => {});
+          client.stopReconnect();
+          await beforeDeadline(client.call("shutdown")).catch(() => {});
+          client.close();
+        } catch {
+          api?.close();
+        }
+      })();
+      return shutdownPromise;
     },
     toggle(t) {
       const method =
@@ -396,13 +486,31 @@ export const useStore = create<S>((set, get) => {
       if (method)
         api
           ?.call(method, t.gid)
-          .then(refresh)
+          .then(() => refresh(true))
           .catch(() => {});
+    },
+    async pauseAll() {
+      if (!api) return;
+      try {
+        await api.call("pauseAll");
+        void refresh(true);
+      } catch (error) {
+        console.error("Could not pause all downloads.", error);
+      }
+    },
+    async resumeAll() {
+      if (!api) return;
+      try {
+        await api.call("unpauseAll");
+        void refresh(true);
+      } catch (error) {
+        console.error("Could not resume all downloads.", error);
+      }
     },
     add(uri) {
       api
         ?.call("addUri", [uri])
-        .then(refresh)
+        .then(() => refresh(true))
         .catch(() => {});
     },
     async addUris(uris, options = {}) {
@@ -417,13 +525,13 @@ export const useStore = create<S>((set, get) => {
           }
         })
       );
-      void refresh();
+      void refresh(true);
       return errors;
     },
     async addTorrent(torrent, options = {}) {
       if (!api) throw new Error("aria2 is not connected");
       await api.call("addTorrent", torrent, [], options);
-      void refresh();
+      void refresh(true);
     },
     async taskUris(gid) {
       if (!api) throw new Error("aria2 is not connected");
@@ -438,7 +546,7 @@ export const useStore = create<S>((set, get) => {
       if (task.state === "dl" || task.state === "seed" || task.queued)
         await api.call("forceRemove", task.gid);
       else await api.call("removeDownloadResult", task.gid);
-      void refresh();
+      void refresh(true);
     },
     async retryTask(task) {
       if (!api) throw new Error("aria2 is not connected");
@@ -448,7 +556,7 @@ export const useStore = create<S>((set, get) => {
       const failed = errors.find(Boolean);
       if (failed) throw new Error(failed);
       await api.call("removeDownloadResult", task.gid);
-      void refresh();
+      void refresh(true);
     },
   };
 });
