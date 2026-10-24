@@ -5,7 +5,7 @@ import { Ic } from './Icon'
 // Window controls only work inside Tauri; in a plain browser they do nothing.
 const win = () => ('__TAURI_INTERNALS__' in window ? getCurrentWindow() : null)
 
-export default function TitleBar() {
+export default function TitleBar({ onAdd }: { onAdd(): void }) {
   return (
     <div className="bar" data-tauri-drag-region>
       <div className="l" data-tauri-drag-region>
@@ -19,6 +19,9 @@ export default function TitleBar() {
         <b>HELIOS</b>
       </div>
       <div className="r">
+        <button type="button" className="add-download" aria-label="Add download" title="Add download" onClick={onAdd}>
+          <Ic n="plus" />
+        </button>
         <button aria-label="Minimize" onClick={() => win()?.minimize()}><Ic n="min" /></button>
         <button aria-label="Maximize" onClick={() => win()?.toggleMaximize()}><Ic n="max" /></button>
         <button aria-label="Close" onClick={() => win()?.close()}><Ic n="x" /></button>

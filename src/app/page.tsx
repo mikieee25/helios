@@ -47,7 +47,7 @@ export default function Page() {
 
   return (
     <div className="win">
-      <TitleBar />
+      <TitleBar onAdd={() => setAddOpen(true)} />
       <AddDialog
         open={addOpen}
         initialLinks={dropLinks}
@@ -62,7 +62,7 @@ export default function Page() {
             <Settings />
           ) : (
             <>
-              <TaskTable onAdd={() => setAddOpen(true)} />
+              <TaskTable />
               <div className="low">
                 <div>
                   <div className="ch-h">

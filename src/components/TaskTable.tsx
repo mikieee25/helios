@@ -101,7 +101,7 @@ const CompletedRow = memo(function CompletedRow({
   );
 });
 
-export default function TaskTable({ onAdd }: { onAdd(): void }) {
+export default function TaskTable() {
   const [menu, setMenu] = useState<{ task: Task; x: number; y: number }>();
   const [actionError, setActionError] = useState("");
   const parentRef = useRef<HTMLDivElement>(null);
@@ -166,7 +166,7 @@ export default function TaskTable({ onAdd }: { onAdd(): void }) {
 
   return (
     <div className="tbl">
-      <div className="task-table-toolbar"><span className="lbl">Downloads</span><button className="add-button" onClick={onAdd}><Ic n="plus" /> Add</button></div>
+      <div className="task-table-toolbar"><span className="lbl">Downloads</span></div>
       <div className="grid">
         <div className="row head">
           <span>NAME</span>

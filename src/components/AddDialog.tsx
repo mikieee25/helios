@@ -219,7 +219,7 @@ export default function AddDialog({
           <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>×</button>
         </div>
         <label className="modal-field">Links
-          <textarea autoFocus value={links} onChange={(event) => { setLinks(event.target.value); setTorrent(""); setTorrentName(""); }} placeholder="Paste one link per line\nhttps, ftp, or magnet" rows={5} />
+          <textarea autoFocus value={links} onChange={(event) => { setLinks(event.target.value); setTorrent(""); setTorrentName(""); }} placeholder={"Paste one link per line\nHTTP, HTTPS, FTP, or magnet"} rows={5} />
         </label>
         <div className="modal-actions">
           <button type="button" className="secondary-button" onClick={() => void chooseTorrent()}>Choose .torrent file</button>
