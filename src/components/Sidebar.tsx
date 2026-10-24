@@ -64,7 +64,9 @@ export default function Sidebar() {
       overwrite: true,
     });
 
-    return () => tween.revert();
+    return () => {
+      tween.revert();
+    };
   }, [seedingCount, completedCount]);
 
   useEffect(() => {

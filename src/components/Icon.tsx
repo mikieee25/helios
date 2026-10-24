@@ -9,6 +9,10 @@ const P: Record<string, string> = {
   chev: 'M9 6l6 6-6 6', pause: 'M9 6v12M15 6v12', check: 'M5 12.5l4.5 4.5L19 7',
   min: 'M5 12h14', max: 'M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z',
   x: 'M6 6l12 12M18 6 6 18', dots: 'M6 12h.01M10 12h.01',
+  plus: 'M12 5v14M5 12h14', trash: 'M4 7h16M10 11v6M14 11v6M5 7l1 14h12l1-14M9 7V4h6v3',
+  reveal: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2M3 12h12M11 8l4 4-4 4M3 12v5a2 2 0 0 0 2 2h5',
+  retry: 'M20 7v5h-5M4 17v-5h5M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2',
+  link: 'M10 13a5 5 0 0 0 7.1 0l3-3A5 5 0 0 0 13 2.9l-1.7 1.7M14 11a5 5 0 0 0-7.1 0l-3 3A5 5 0 0 0 11 21.1l1.7-1.7',
 }
 export const Ic = ({ n, className = '' }: { n: string; className?: string }) => (
   <svg className={`i ${className}`} viewBox="0 0 24 24"><path d={P[n]} /></svg>

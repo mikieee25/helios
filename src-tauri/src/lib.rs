@@ -1,4 +1,5 @@
 use serde::Serialize;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{net::TcpListener, sync::Mutex, time::Duration};
 use tauri::{Manager, RunEvent, State};
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
@@ -17,13 +18,27 @@ fn get_rpc_config(config: State<'_, RpcConfig>) -> RpcConfig {
     config.inner().clone()
 }
 
+#[tauri::command]
+fn read_torrent_file(path: String) -> Result<String, String> {
+    if !std::path::Path::new(&path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+    {
+        return Err("Choose a .torrent file.".into());
+    }
+    std::fs::read(&path)
+        .map(|bytes| STANDARD.encode(bytes))
+        .map_err(|error| format!("Could not read torrent file {path}: {error}"))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![get_rpc_config])
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![get_rpc_config, read_torrent_file])
         .setup(|app| {
             // Keep the download session between launches.
             let data = app.path().app_data_dir()?;

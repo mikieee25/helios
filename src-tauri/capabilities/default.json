@@ -10,6 +10,8 @@
     "core:window:allow-start-dragging",
     "store:default",
     "dialog:default",
-    "notification:default"
+    "dialog:allow-open",
+    "notification:default",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

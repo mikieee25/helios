@@ -1,6 +1,7 @@
 "use client";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useStore, Task, Filter } from "@/lib/store";
 import type { HistoryEntry } from "@/lib/history";
 import { sz, eta } from "@/lib/format";
@@ -8,9 +9,16 @@ import { Ic } from "./Icon";
 
 const show = (t: Task, f: Filter) =>
   f === "all" ? t.state !== "done" : f !== "done" && f === t.state;
-const ICON = { dl: "down", seed: "up", done: "check", pa: "pause", err: "x" };
+type RowProps = {
+  t: Task;
+  sel: boolean;
+  onRemove(task: Task): void;
+  onRetry(task: Task): void;
+  onReveal(task: Task): void;
+  onContext(event: React.MouseEvent, task: Task): void;
+};
 
-const Row = memo(function Row({ t, sel }: { t: Task; sel: boolean }) {
+const Row = memo(function Row({ t, sel, onRemove, onRetry, onReveal, onContext }: RowProps) {
   const time =
     t.state === "dl"
       ? eta((t.size * (1 - t.done)) / t.speed)
@@ -27,19 +35,16 @@ const Row = memo(function Row({ t, sel }: { t: Task; sel: boolean }) {
     <div
       className={`row ${t.state}${sel ? " sel" : ""}`}
       onClick={() => useStore.getState().select(t.gid)}
+      onContextMenu={(event) => onContext(event, t)}
     >
       <div className="nm">
-        <button
-          className="st"
-          aria-label="Pause or resume"
-          onClick={(e) => {
-            e.stopPropagation();
-            useStore.getState().toggle(t);
-          }}
-        >
-          <Ic n={ICON[t.state]} />
-        </button>
         <span title={t.name}>{t.name}</span>
+        <span className="row-actions">
+          {(t.state === "dl" || t.state === "seed" || t.state === "pa") && <button className="st" aria-label={t.state === "pa" && !t.queued ? "Resume download" : "Pause download"} onClick={(event) => { event.stopPropagation(); useStore.getState().toggle(t); }}><Ic n={t.state === "pa" && !t.queued ? "down" : "pause"} /></button>}
+          {t.state === "err" && <button className="st" aria-label="Retry download" onClick={(event) => { event.stopPropagation(); onRetry(t); }}><Ic n="retry" /></button>}
+          <button className="st" aria-label={`Remove ${t.name}`} onClick={(event) => { event.stopPropagation(); onRemove(t); }}><Ic n="trash" /></button>
+          <button className="st" aria-label={`Show ${t.name} in folder`} disabled={!t.files[0]?.path} onClick={(event) => { event.stopPropagation(); onReveal(t); }}><Ic n="reveal" /></button>
+        </span>
       </div>
       <div>
         <div className="trk">
@@ -56,11 +61,19 @@ const Row = memo(function Row({ t, sel }: { t: Task; sel: boolean }) {
 
 const CompletedRow = memo(function CompletedRow({
   entry,
+  task,
+  onRemove,
+  onReveal,
+  onContext,
 }: {
   entry: HistoryEntry;
+  task?: Task;
+  onRemove(task: Task): void;
+  onReveal(task: Task): void;
+  onContext(event: React.MouseEvent, task: Task): void;
 }) {
   return (
-    <div className="row done">
+    <div className="row done" onContextMenu={task ? (event) => onContext(event, task) : undefined}>
       <div className="nm">
         <button
           className="st"
@@ -70,6 +83,10 @@ const CompletedRow = memo(function CompletedRow({
           <Ic n="x" />
         </button>
         <span title={entry.name}>{entry.name}</span>
+        {task && <span className="row-actions">
+          <button className="st" aria-label={`Remove ${task.name}`} onClick={() => onRemove(task)}><Ic n="trash" /></button>
+          <button className="st" aria-label={`Show ${task.name} in folder`} disabled={!task.files[0]?.path} onClick={() => onReveal(task)}><Ic n="reveal" /></button>
+        </span>}
       </div>
       <div>
         <div className="trk">
@@ -84,7 +101,9 @@ const CompletedRow = memo(function CompletedRow({
   );
 });
 
-export default function TaskTable() {
+export default function TaskTable({ onAdd }: { onAdd(): void }) {
+  const [menu, setMenu] = useState<{ task: Task; x: number; y: number }>();
+  const [actionError, setActionError] = useState("");
   const parentRef = useRef<HTMLDivElement>(null);
   const tasks = useStore((s) => s.tasks);
   const history = useStore((s) => s.history);
@@ -116,8 +135,38 @@ export default function TaskTable() {
       ? "Nothing here yet. Paste a link anywhere to start a download."
       : `Waiting for aria2 at ${rpcUrl}`;
 
+  useEffect(() => {
+    const close = () => setMenu(undefined);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, []);
+
+  async function run(action: () => Promise<unknown>) {
+    setActionError("");
+    try { await action(); }
+    catch (error) { setActionError(error instanceof Error ? error.message : String(error)); }
+    setMenu(undefined);
+  }
+
+  const remove = (task: Task) => void run(() => useStore.getState().removeTask(task));
+  const retry = (task: Task) => void run(() => useStore.getState().retryTask(task));
+  const reveal = (task: Task) => void run(async () => {
+    const path = task.files[0]?.path;
+    if (!path) throw new Error("aria2 has not provided a file path for this download.");
+    await revealItemInDir(path);
+  });
+  const context = (event: React.MouseEvent, task: Task) => {
+    event.preventDefault();
+    setMenu({ task, x: event.clientX, y: event.clientY });
+  };
+
   return (
     <div className="tbl">
+      <div className="task-table-toolbar"><span className="lbl">Downloads</span><button className="add-button" onClick={onAdd}><Ic n="plus" /> Add</button></div>
       <div className="grid">
         <div className="row head">
           <span>NAME</span>
@@ -145,9 +194,9 @@ export default function TaskTable() {
                     }}
                   >
                     {isHistory ? (
-                      <CompletedRow entry={row as HistoryEntry} />
+                      <CompletedRow entry={row as HistoryEntry} task={tasks.find((task) => task.gid === (row as HistoryEntry).id)} onRemove={remove} onReveal={reveal} onContext={context} />
                     ) : (
-                      <Row t={row as Task} sel={(row as Task).gid === sel} />
+                      <Row t={row as Task} sel={(row as Task).gid === sel} onRemove={remove} onRetry={retry} onReveal={reveal} onContext={context} />
                     )}
                   </div>
                 );
@@ -165,6 +214,18 @@ export default function TaskTable() {
           </div>
         )}
       </div>
+      {actionError && <div className="table-error" role="alert">{actionError}</div>}
+      {menu && <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
+        {(menu.task.state === "dl" || menu.task.state === "seed" || menu.task.state === "pa") && <button role="menuitem" onClick={() => useStore.getState().toggle(menu.task)}>{menu.task.state === "pa" && !menu.task.queued ? "Resume" : "Pause"}</button>}
+        {menu.task.state === "err" && <button role="menuitem" onClick={() => retry(menu.task)}>Retry</button>}
+        <button role="menuitem" onClick={() => remove(menu.task)}>Remove</button>
+        <button role="menuitem" disabled={!menu.task.files[0]?.path} onClick={() => reveal(menu.task)}>Show in folder</button>
+        <button role="menuitem" onClick={() => void run(async () => {
+          const uri = (await useStore.getState().taskUris(menu.task.gid))[0];
+          if (!uri) throw new Error("No source URL is available to copy.");
+          await navigator.clipboard.writeText(uri);
+        })}>Copy link</button>
+      </div>}
     </div>
   );
 }

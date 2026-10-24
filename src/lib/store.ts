@@ -27,7 +27,10 @@ export type Task = {
   queued: boolean;
   since: number;
   category: FileCategory;
+  dir: string;
+  files: { path: string }[];
 };
+export type AddOptions = Record<string, string>;
 export type Settings = {
   maxDownloadMB: number;
   maxUploadMB: number;
@@ -60,6 +63,7 @@ const KEYS = [
   "seeder",
   "bittorrent",
   "files",
+  "dir",
 ];
 
 /** Time of the last poll. Read by the chart's animation loop, so it lives outside React state. */
@@ -94,6 +98,11 @@ interface S {
   removeHistory(id: string): Promise<void>;
   toggle(t: Task): void;
   add(uri: string): void;
+  addUris(uris: string[], options?: AddOptions): Promise<string[]>;
+  addTorrent(torrent: string, options?: AddOptions): Promise<void>;
+  taskUris(gid: string): Promise<string[]>;
+  removeTask(task: Task): Promise<void>;
+  retryTask(task: Task): Promise<void>;
 }
 
 let api: Aria2 | undefined;
@@ -105,7 +114,12 @@ const seen = new Map<string, number>();
 const pendingCompletions = new Set<string>();
 const completing = new Set<string>();
 const same = (a: Task, b: Task) =>
-  (Object.keys(a) as (keyof Task)[]).every((k) => a[k] === b[k]);
+  (Object.keys(a) as (keyof Task)[]).every((k) =>
+    k === "files"
+      ? a.files.length === b.files.length &&
+        a.files.every((file, index) => file.path === b.files[index]?.path)
+      : a[k] === b[k]
+  );
 const inTauri = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -145,6 +159,8 @@ function toTask(r: any): Task {
       fileCategory(name) === "other"
         ? dominantCategory(files)
         : fileCategory(name),
+    dir: r.dir ?? "",
+    files: (r.files ?? []).map((f: { path?: string }) => ({ path: f.path ?? "" })),
   };
 }
 
@@ -388,6 +404,51 @@ export const useStore = create<S>((set, get) => {
         ?.call("addUri", [uri])
         .then(refresh)
         .catch(() => {});
+    },
+    async addUris(uris, options = {}) {
+      if (!api) return uris.map(() => "aria2 is not connected");
+      const errors = await Promise.all(
+        uris.map(async (uri) => {
+          try {
+            await api!.call("addUri", [uri], options);
+            return "";
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        })
+      );
+      void refresh();
+      return errors;
+    },
+    async addTorrent(torrent, options = {}) {
+      if (!api) throw new Error("aria2 is not connected");
+      await api.call("addTorrent", torrent, [], options);
+      void refresh();
+    },
+    async taskUris(gid) {
+      if (!api) throw new Error("aria2 is not connected");
+      return api
+        .call<any[]>("getUris", gid)
+        .then((uris) => uris.map((entry) => entry.uri));
+    },
+    async removeTask(task) {
+      if (!api) throw new Error("aria2 is not connected");
+      if (task.state !== "done" && !window.confirm(`Remove ${task.name}?`))
+        return;
+      if (task.state === "dl" || task.state === "seed" || task.queued)
+        await api.call("forceRemove", task.gid);
+      else await api.call("removeDownloadResult", task.gid);
+      void refresh();
+    },
+    async retryTask(task) {
+      if (!api) throw new Error("aria2 is not connected");
+      const uris = await get().taskUris(task.gid);
+      if (!uris.length) throw new Error("No source URLs are available to retry.");
+      const errors = await get().addUris(uris);
+      const failed = errors.find(Boolean);
+      if (failed) throw new Error(failed);
+      await api.call("removeDownloadResult", task.gid);
+      void refresh();
     },
   };
 });
