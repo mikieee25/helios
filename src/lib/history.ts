@@ -8,6 +8,7 @@ export type HistoryEntry = {
   completedAt: number;
   upTotal: number;
   category: FileCategory;
+  filePath?: string;
 };
 
 const KEY = "completedHistory";

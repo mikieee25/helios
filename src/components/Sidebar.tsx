@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
 import { useStore, Filter } from "@/lib/store";
+import { buildOverview } from "@/lib/overview";
 import { Ic } from "./Icon";
 
 const NAV: [Filter, string, string][] = [
@@ -14,11 +15,13 @@ export default function Sidebar() {
   const filter = useStore((s) => s.filter);
   const history = useStore((s) => s.history);
   const tasks = useStore((s) => s.tasks);
+  const category = useStore((s) => s.category);
   const notify = useStore((s) => s.notify);
   const view = useStore((s) => s.view);
+  const ready = useStore((s) => s.ready);
   const setFilter = useStore((s) => s.setFilter);
   const counts = [
-    tasks.filter((t) => t.state !== "done").length,
+    buildOverview(tasks, history, category).length,
     tasks.filter((t) => t.state === "dl").length,
     tasks.filter((t) => t.state === "seed").length,
     history.length,
@@ -104,7 +107,7 @@ export default function Sidebar() {
                     : ""
               }`}
             >
-              {counts[i]}
+              {ready ? counts[i] : "—"}
             </span>
           </button>
         ))}

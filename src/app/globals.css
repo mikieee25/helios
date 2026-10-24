@@ -452,6 +452,7 @@ svg.i {
   background: var(--sel);
 }
 .task-scroll {
+  position: relative;
   min-height: 100px;
   max-height: clamp(160px, 24vh, 260px);
   overflow-y: auto;
@@ -478,6 +479,16 @@ svg.i {
   width: 100%;
   padding-bottom: 8px;
 }
+.task-scroll.connection-lost .virtual-row { opacity: .6; }
+.connection-banner { padding: 8px 12px; background: var(--row); color: var(--mut); font-size: 12px; border-bottom: 1px solid var(--line); }
+.engine-state { min-height: 220px; padding: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; color: var(--mut); text-align: center; }
+.engine-state strong { color: var(--tx); font-size: 15px; font-weight: 500; }
+.engine-spinner { width: 20px; height: 20px; border: 2px solid var(--line); border-top-color: var(--cy); border-radius: 50%; animation: engine-spin .8s linear infinite; }
+.engine-spinner.failed { border-color: var(--line); animation: none; }
+.engine-state details { color: var(--dim); font-size: 12px; }
+.engine-state summary { cursor: pointer; }
+.engine-state code { display: block; margin-top: 8px; }
+@keyframes engine-spin { to { transform: rotate(360deg); } }
 .virtual-row > .row {
   margin: 0;
   height: 44px;
@@ -578,6 +589,12 @@ svg.i {
 .task-table-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 8px; }
 .task-table-toolbar .add-button { margin-left: auto; }
 .task-table-toolbar .lbl { margin: 0; }
+.table-header-actions, .selection-bar { display: flex; align-items: center; gap: 8px; }
+.selection-bar { min-height: 42px; margin: 0 4px 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--row); color: var(--mut); }
+.selection-bar .secondary-button { min-height: 30px; padding: 5px 10px; }
+.selection-clear { margin-left: auto; color: var(--dim); font-size: 20px; }
+.remove-dialog { width: min(500px, 100%); }
+.remove-list { display: grid; gap: 6px; max-height: 180px; overflow: auto; color: var(--mut); }
 .add-button, .primary-button, .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 7px 12px; border-radius: 8px; }
 .add-button, .primary-button { background: var(--cy); color: var(--bg); font-weight: 600; }
 .add-button svg.i { width: 16px; height: 16px; }
@@ -611,6 +628,7 @@ svg.i {
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
 .primary-button:disabled { opacity: 0.65; cursor: wait; }
 @media (prefers-reduced-motion: reduce) { .row-actions { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .engine-spinner { animation: none; } }
 
 /* Window-sized layout */
 .win {

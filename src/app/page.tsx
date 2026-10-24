@@ -50,6 +50,7 @@ export default function Page() {
       const shutdownAndDestroy = async () => {
         if (closing) return;
         closing = true;
+        await invoke("begin_aria_shutdown").catch((error) => console.error("Could not mark aria2 shutdown.", error));
         await useStore.getState().shutdown();
         await win.destroy();
       };

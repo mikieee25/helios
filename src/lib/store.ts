@@ -29,6 +29,8 @@ export type Task = {
   category: FileCategory;
   dir: string;
   files: { path: string }[];
+  errorMessage: string;
+  errorCode: string;
 };
 export type AddOptions = Record<string, string>;
 export type Settings = {
@@ -68,6 +70,8 @@ const KEYS = [
   "bittorrent",
   "files",
   "dir",
+  "errorMessage",
+  "errorCode",
 ];
 
 /** Time of the last poll. Read by the chart's animation loop, so it lives outside React state. */
@@ -75,6 +79,8 @@ export const clock = { t: 0 };
 
 interface S {
   online: boolean;
+  connectedOnce: boolean;
+  ready: boolean;
   rpcUrl: string;
   tasks: Task[];
   history: HistoryEntry[];
@@ -91,6 +97,7 @@ interface S {
   dlHist: number[];
   upHist: number[];
   start(): Promise<void>;
+  reconnect(): void;
   setFilter(f: Filter): void;
   setCategory(c?: FileCategory): void;
   select(g: string): void;
@@ -102,12 +109,12 @@ interface S {
   clearHistory(): Promise<void>;
   removeHistory(id: string): Promise<void>;
   shutdown(): Promise<void>;
-  toggle(t: Task): void;
+  toggle(t: Task): Promise<void>;
   add(uri: string): void;
   addUris(uris: string[], options?: AddOptions): Promise<string[]>;
   addTorrent(torrent: string, options?: AddOptions): Promise<void>;
   taskUris(gid: string): Promise<string[]>;
-  removeTask(task: Task): Promise<void>;
+  removeTask(task: Task, alsoDeleteFiles?: boolean): Promise<void>;
   retryTask(task: Task): Promise<void>;
   pauseAll(): Promise<void>;
   resumeAll(): Promise<void>;
@@ -176,6 +183,8 @@ function toTask(r: any): Task {
         : fileCategory(name),
     dir: r.dir ?? "",
     files: (r.files ?? []).map((f: { path?: string }) => ({ path: f.path ?? "" })),
+    errorMessage: String(r.errorMessage ?? ""),
+    errorCode: String(r.errorCode ?? ""),
   };
 }
 
@@ -304,6 +313,7 @@ export const useStore = create<S>((set, get) => {
       completedAt: Date.now(),
       upTotal: task.upTotal,
       category: task.category,
+      filePath: task.files[0]?.path,
     };
     const result = await historyStore.add(entry);
     set({ history: result.entries });
@@ -329,7 +339,7 @@ export const useStore = create<S>((set, get) => {
       historyStore.load(),
       readValue<Settings>("settings", DEFAULT_SETTINGS),
     ]);
-    set({ history, settings: { ...DEFAULT_SETTINGS, ...settings } });
+    set({ history, settings: { ...DEFAULT_SETTINGS, ...settings }, ready: true });
     let url = ARIA2_URL;
     rpcSecret = BROWSER_SECRET;
     if (inTauri()) {
@@ -362,7 +372,7 @@ export const useStore = create<S>((set, get) => {
         void refresh(stoppedEvent);
       },
       (online) => {
-        set({ online });
+        set({ online, ...(online ? { connectedOnce: true } : {}) });
         if (online && !shutdownRequested)
           void applySettings().then(() => refresh());
       }
@@ -379,7 +389,9 @@ export const useStore = create<S>((set, get) => {
 
   return {
     online: false,
-    rpcUrl: ARIA2_URL,
+    connectedOnce: false,
+    ready: false,
+    rpcUrl: "",
     tasks: [],
     history: [],
     filter: "all",
@@ -399,6 +411,10 @@ export const useStore = create<S>((set, get) => {
           starting = undefined;
         });
       return starting;
+    },
+    reconnect() {
+      if (api) api.reconnect();
+      else void get().start();
     },
     setFilter: (filter) => set({ filter }),
     setCategory: (category) =>
@@ -476,18 +492,17 @@ export const useStore = create<S>((set, get) => {
       })();
       return shutdownPromise;
     },
-    toggle(t) {
+    async toggle(t) {
       const method =
         t.state === "dl" || t.state === "seed" || t.queued
           ? "pause"
           : t.state === "pa"
             ? "unpause"
             : null;
-      if (method)
-        api
-          ?.call(method, t.gid)
-          .then(() => refresh(true))
-          .catch(() => {});
+      if (method && api) {
+        await api.call(method, t.gid);
+        void refresh(true);
+      }
     },
     async pauseAll() {
       if (!api) return;
@@ -539,14 +554,21 @@ export const useStore = create<S>((set, get) => {
         .call<any[]>("getUris", gid)
         .then((uris) => uris.map((entry) => entry.uri));
     },
-    async removeTask(task) {
+    async removeTask(task, alsoDeleteFiles = false) {
       if (!api) throw new Error("aria2 is not connected");
-      if (task.state !== "done" && !window.confirm(`Remove ${task.name}?`))
-        return;
       if (task.state === "dl" || task.state === "seed" || task.queued)
         await api.call("forceRemove", task.gid);
       else await api.call("removeDownloadResult", task.gid);
       void refresh(true);
+      if (alsoDeleteFiles && !task.files.some((file) => file.path))
+        throw new Error("aria2 has not provided file paths for this download.");
+      if (alsoDeleteFiles && task.files.length) {
+        const errors = await invoke<string[]>("delete_files", {
+          dir: task.dir,
+          paths: task.files.map((file) => file.path).filter(Boolean),
+        });
+        if (errors.length) throw new Error(errors.join("\n"));
+      }
     },
     async retryTask(task) {
       if (!api) throw new Error("aria2 is not connected");

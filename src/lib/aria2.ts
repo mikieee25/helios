@@ -19,22 +19,26 @@ export class Aria2 {
 
   private connect() {
     if (this.stopped) return;
+    clearTimeout(this.timer);
     const ws = new WebSocket(this.url);
     this.ws = ws;
+    const isCurrent = () => this.ws === ws;
     ws.onopen = () => {
       const timeout = setTimeout(() => ws.close(), 3000);
       this.call<{ version?: string }>("getVersion")
         .then((result) => {
           clearTimeout(timeout);
+          if (!isCurrent()) return;
           if (!result.version) return ws.close();
           this.onState(true);
         })
         .catch(() => {
           clearTimeout(timeout);
-          ws.close();
+          if (isCurrent()) ws.close();
         });
     };
     ws.onclose = () => {
+      if (!isCurrent()) return;
       this.onState(false);
       this.pending.forEach((p) => p.rej(new Error("connection closed")));
       this.pending.clear();
@@ -78,6 +82,21 @@ export class Aria2 {
   stopReconnect() {
     this.stopped = true;
     clearTimeout(this.timer);
+  }
+
+  reconnect() {
+    this.stopped = false;
+    clearTimeout(this.timer);
+    const previous = this.ws;
+    if (previous) {
+      previous.onopen = null;
+      previous.onclose = null;
+      previous.onmessage = null;
+      previous.close();
+    }
+    this.pending.forEach((request) => request.rej(new Error("reconnecting")));
+    this.pending.clear();
+    this.connect();
   }
 
   close() {

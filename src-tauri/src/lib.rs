@@ -2,7 +2,10 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use std::{
     net::TcpListener,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tauri::{
@@ -13,13 +16,34 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
 use tauri_plugin_single_instance::init as single_instance;
 
-struct Aria(Mutex<Option<CommandChild>>);
+struct Aria {
+    child: Mutex<Option<CommandChild>>,
+    shutting_down: Arc<AtomicBool>,
+}
+
+fn aria2_args(port: u16, secret: &str, session: &str, dir: &str) -> Vec<String> {
+    vec![
+        "--enable-rpc".into(),
+        format!("--rpc-listen-port={port}"),
+        format!("--rpc-secret={secret}"),
+        "--rpc-listen-all=false".into(),
+        "--continue=true".into(),
+        "--split=16".into(),
+        "--max-connection-per-server=16".into(),
+        "--min-split-size=1M".into(),
+        format!("--dir={dir}"),
+        format!("--input-file={session}"),
+        format!("--save-session={session}"),
+        "--save-session-interval=30".into(),
+    ]
+}
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
@@ -208,6 +232,11 @@ fn get_rpc_config(config: State<'_, RpcConfig>) -> RpcConfig {
 }
 
 #[tauri::command]
+fn begin_aria_shutdown(aria: State<'_, Aria>) {
+    aria.shutting_down.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
 fn read_torrent_file(path: String) -> Result<String, String> {
     if !std::path::Path::new(&path)
         .extension()
@@ -220,8 +249,107 @@ fn read_torrent_file(path: String) -> Result<String, String> {
         .map_err(|error| format!("Could not read torrent file {path}: {error}"))
 }
 
+#[tauri::command]
+fn delete_files(dir: String, paths: Vec<String>) -> Vec<String> {
+    let root = match std::fs::canonicalize(&dir) {
+        Ok(root) if root.is_dir() => root,
+        Ok(_) => return vec![format!("Download directory is not a directory: {dir}")],
+        Err(error) => {
+            return vec![format!(
+                "Could not access download directory {dir}: {error}"
+            )]
+        }
+    };
+    let mut errors = Vec::new();
+    for path in paths {
+        let path = std::path::PathBuf::from(&path);
+        let Some(name) = path.file_name() else {
+            errors.push(format!("Invalid file path: {}", path.display()));
+            continue;
+        };
+        let Some(parent) = path.parent() else {
+            errors.push(format!("Invalid file path: {}", path.display()));
+            continue;
+        };
+        let canonical_parent = match std::fs::canonicalize(parent) {
+            Ok(parent) => parent,
+            Err(error) => {
+                errors.push(format!("Could not access {}: {error}", path.display()));
+                continue;
+            }
+        };
+        if canonical_parent != root && !canonical_parent.starts_with(&root) {
+            errors.push(format!(
+                "Refusing to delete a file outside {dir}: {}",
+                path.display()
+            ));
+            continue;
+        }
+        let target = canonical_parent.join(name);
+        if target == root {
+            errors.push(format!(
+                "Refusing to delete the download directory: {}",
+                target.display()
+            ));
+            continue;
+        }
+        match std::fs::symlink_metadata(&target) {
+            Ok(metadata)
+                if !metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
+            {
+                errors.push(format!(
+                    "Refusing to delete a non-file path: {}",
+                    target.display()
+                ));
+                continue;
+            }
+            Ok(_) => {
+                if let Err(error) = std::fs::remove_file(&target) {
+                    errors.push(format!("Could not delete {}: {error}", target.display()));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                errors.push(format!(
+                    "File is missing or was moved: {}",
+                    target.display()
+                ));
+            }
+            Err(error) => errors.push(format!("Could not access {}: {error}", target.display())),
+        }
+        let control = std::path::PathBuf::from(format!("{}.aria2", target.display()));
+        match std::fs::symlink_metadata(&control) {
+            Ok(metadata) if metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
+                if let Err(error) = std::fs::remove_file(&control) {
+                    errors.push(format!("Could not delete {}: {error}", control.display()));
+                }
+            }
+            Ok(_) => errors.push(format!(
+                "Refusing to delete a non-file path: {}",
+                control.display()
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!("Could not access {}: {error}", control.display())),
+        }
+    }
+    errors
+}
+
+#[tauri::command]
+fn open_download_file(app: AppHandle, path: String) -> Result<(), String> {
+    let file = std::path::Path::new(&path);
+    match std::fs::metadata(file) {
+        Ok(metadata) if metadata.is_file() => app
+            .opener()
+            .open_path(&path, None::<&str>)
+            .map_err(|error| format!("Could not open {path}: {error}")),
+        _ => Err(format!("File is missing or was moved: {path}")),
+    }
+}
+
 pub fn run() {
     let pending = PendingOpen(Arc::new(Mutex::new(PendingOpenState::default())));
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let setup_shutting_down = shutting_down.clone();
     let callback_pending = pending.clone();
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
@@ -229,6 +357,8 @@ pub fn run() {
         forward_open_args(app, &callback_pending, &args);
         show_window(app);
     }));
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
     let builder =
         builder
             .plugin(tauri_plugin_deep_link::init())
@@ -245,6 +375,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_rpc_config,
             read_torrent_file,
+            delete_files,
+            open_download_file,
+            begin_aria_shutdown,
             take_open_requests,
             set_autostart
         ])
@@ -286,26 +419,13 @@ pub fn run() {
             let dir = app.path().download_dir()?.to_string_lossy().to_string();
 
             let secret = uuid::Uuid::new_v4().simple().to_string();
-            let mut started: Option<(u16, CommandChild)> = None;
+            let mut started: Option<(u16, CommandChild, tokio::sync::oneshot::Sender<()>)> = None;
             let mut last_error = "aria2 did not report an RPC listener".to_string();
             for _ in 0..5 {
                 let listener = TcpListener::bind(("127.0.0.1", 0))?;
                 let port = listener.local_addr()?.port();
                 drop(listener);
-                let args: Vec<String> = vec![
-                    "--enable-rpc".into(),
-                    format!("--rpc-listen-port={port}"),
-                    format!("--rpc-secret={secret}"),
-                    "--rpc-listen-all=false".into(),
-                    "--continue=true".into(),
-                    "--split=16".into(),
-                    "--max-connection-per-server=16".into(),
-                    "--min-split-size=1M".into(),
-                    format!("--dir={dir}"),
-                    format!("--input-file={s}"),
-                    format!("--save-session={s}"),
-                    "--save-session-interval=30".into(),
-                ];
+                let args = aria2_args(port, &secret, &s, &dir);
                 let (mut rx, child) = match app
                     .shell()
                     .sidecar("aria2c")
@@ -318,8 +438,16 @@ pub fn run() {
                     }
                 };
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+                let (armed_tx, armed_rx) = tokio::sync::oneshot::channel();
+                let monitor_app = app.handle().clone();
+                let monitor_shutdown = setup_shutting_down.clone();
+                let monitor_session = s.clone();
+                let monitor_dir = dir.clone();
+                let monitor_secret = secret.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut ready_tx = Some(ready_tx);
+                    let mut listening = false;
+                    let mut terminated = false;
                     while let Some(event) = rx.recv().await {
                         match event {
                             CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
@@ -327,8 +455,9 @@ pub fn run() {
                                 if output
                                     .contains(&format!("IPv4 RPC: listening on TCP port {port}"))
                                 {
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                    if !listening {
+                                        listening = true;
+                                        if let Some(tx) = ready_tx.take() { let _ = tx.send(Ok(())); }
                                     }
                                 } else if output.contains("RPC: Failed to bind TCP socket") {
                                     if let Some(tx) = ready_tx.take() {
@@ -340,16 +469,70 @@ pub fn run() {
                                 if let Some(tx) = ready_tx.take() {
                                     let _ =
                                         tx.send(Err(format!("aria2 exited ({:?})", status.code)));
+                                    return;
                                 }
+                                terminated = true;
                                 break;
                             }
                             _ => {}
                         }
                     }
+                    if !listening { return; }
+                    if armed_rx.await.is_err() { return; }
+                    loop {
+                        if !terminated {
+                            match rx.recv().await {
+                                Some(CommandEvent::Terminated(_)) | None => terminated = true,
+                                Some(_) => continue,
+                            }
+                        }
+                        if monitor_shutdown.load(Ordering::SeqCst) { break; }
+                        if let Some(state) = monitor_app.try_state::<Aria>() {
+                            state.child.lock().unwrap().take();
+                        }
+                        let mut recovered = false;
+                        for delay in [1u64, 2, 4] {
+                            tokio::time::sleep(Duration::from_secs(delay)).await;
+                            if monitor_shutdown.load(Ordering::SeqCst) { break; }
+                            let args = aria2_args(port, &monitor_secret, &monitor_session, &monitor_dir);
+                            let Ok((mut replacement_rx, replacement_child)) = monitor_app.shell()
+                                .sidecar("aria2c")
+                                .and_then(|command| command.args(args).spawn()) else { continue; };
+                            let ready = tokio::time::timeout(Duration::from_secs(5), async {
+                                while let Some(event) = replacement_rx.recv().await {
+                                    match event {
+                                        CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes)
+                                            if String::from_utf8_lossy(&bytes).contains(&format!("IPv4 RPC: listening on TCP port {port}")) => return true,
+                                        CommandEvent::Terminated(_) => return false,
+                                        _ => {}
+                                    }
+                                }
+                                false
+                            }).await.unwrap_or(false);
+                            if ready && !monitor_shutdown.load(Ordering::SeqCst) {
+                                if let Some(state) = monitor_app.try_state::<Aria>() {
+                                    *state.child.lock().unwrap() = Some(replacement_child);
+                                    rx = replacement_rx;
+                                    terminated = false;
+                                    recovered = true;
+                                    break;
+                                }
+                            }
+                            let _ = replacement_child.kill();
+                        }
+                        if recovered { continue; }
+                        if !monitor_shutdown.load(Ordering::SeqCst) {
+                            monitor_app.dialog().message("aria2 stopped and could not be restarted after three attempts.")
+                                .title("Download engine stopped")
+                                .kind(MessageDialogKind::Error)
+                                .blocking_show();
+                        }
+                        break;
+                    }
                 });
                 match ready_rx.recv_timeout(Duration::from_secs(5)) {
                     Ok(Ok(())) => {
-                        started = Some((port, child));
+                        started = Some((port, child, armed_tx));
                         break;
                     }
                     Ok(Err(error)) => {
@@ -362,7 +545,7 @@ pub fn run() {
                     }
                 }
             }
-            let Some((port, child)) = started else {
+            let Some((port, child, armed_tx)) = started else {
                 let message = format!("aria2 failed to start after 5 port attempts: {last_error}");
                 app.dialog()
                     .message(message.clone())
@@ -371,8 +554,9 @@ pub fn run() {
                     .blocking_show();
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, message).into());
             };
-            app.manage(Aria(Mutex::new(Some(child))));
+            app.manage(Aria { child: Mutex::new(Some(child)), shutting_down: setup_shutting_down.clone() });
             app.manage(RpcConfig { port, secret });
+            let _ = armed_tx.send(());
             build_tray(app, pending.clone())?;
             Ok(())
         })
@@ -384,9 +568,13 @@ pub fn run() {
             return;
         }
     };
-    app.run(|app, event| {
+    app.run(move |app, event| {
         if let RunEvent::Exit = event {
-            if let Some(child) = app.state::<Aria>().0.lock().unwrap().take() {
+            shutting_down.store(true, Ordering::SeqCst);
+            let aria = app.state::<Aria>();
+            aria.shutting_down.store(true, Ordering::SeqCst);
+            let child = aria.child.lock().unwrap().take();
+            if let Some(child) = child {
                 let _ = child.kill();
             }
         }
