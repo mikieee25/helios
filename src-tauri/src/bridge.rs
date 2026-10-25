@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::VecDeque,
     fs,
     io::Read,
     path::PathBuf,
@@ -157,6 +158,7 @@ struct BridgeInner {
     pairing: Mutex<Pairing>,
     stop: AtomicBool,
     agent: ureq::Agent,
+    handoff_timings: Mutex<VecDeque<u64>>,
 }
 
 pub struct BridgeService {
@@ -201,6 +203,7 @@ impl BridgeService {
                 .timeout(Duration::from_secs(4))
                 .try_proxy_from_env(false)
                 .build(),
+            handoff_timings: Mutex::new(VecDeque::with_capacity(20)),
         });
         let worker_server = server.clone();
         let worker_inner = inner.clone();
@@ -283,6 +286,16 @@ impl BridgeService {
             .map_err(|_| "Could not save browser bridge clients.".to_string())
     }
 
+    fn handoff_timings(&self) -> Vec<u64> {
+        self.inner
+            .handoff_timings
+            .lock()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect()
+    }
+
     pub fn stop(&self) {
         self.set_enabled(false);
         self.inner.stop.store(true, Ordering::SeqCst);
@@ -330,7 +343,13 @@ pub fn bridge_revoke_client(service: State<'_, BridgeService>, id: String) -> Re
     service.revoke_client(&id)
 }
 
+#[tauri::command]
+pub fn bridge_get_timings(service: State<'_, BridgeService>) -> Vec<u64> {
+    service.handoff_timings()
+}
+
 fn handle_request(mut request: Request, inner: &BridgeInner) {
+    let request_started = Instant::now();
     let method = request.method().clone();
     let path = request
         .url()
@@ -553,6 +572,10 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                             }
                         }
                     }
+                    let elapsed_ms =
+                        request_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                    record_handoff_timing(&inner.handoff_timings, elapsed_ms);
+                    let _ = inner.app.emit("bridge://added", json!({ "gids": gids }));
                     respond_json(
                         request,
                         200,
@@ -589,6 +612,14 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
             json!({ "error": "Not found" }),
             origin.as_deref(),
         ),
+    }
+}
+
+fn record_handoff_timing(timings: &Mutex<VecDeque<u64>>, elapsed_ms: u64) {
+    let mut timings = timings.lock().unwrap();
+    timings.push_back(elapsed_ms);
+    if timings.len() > 20 {
+        timings.pop_front();
     }
 }
 
@@ -985,6 +1016,18 @@ mod tests {
         assert_ne!(hash, "secret-token");
         assert!(token_matches(&hash, "secret-token"));
         assert!(!token_matches(&hash, "other-token"));
+    }
+
+    #[test]
+    fn handoff_timings_keep_only_the_latest_twenty() {
+        let timings = Mutex::new(VecDeque::new());
+        for elapsed in 0..25 {
+            record_handoff_timing(&timings, elapsed);
+        }
+        assert_eq!(
+            timings.lock().unwrap().iter().copied().collect::<Vec<_>>(),
+            (5..25).map(|value| value as u64).collect::<Vec<_>>()
+        );
     }
 
     #[test]

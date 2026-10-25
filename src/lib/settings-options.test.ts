@@ -2,6 +2,25 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, optionsFor, validateProxy } from "./store";
 
 describe("optionsFor", () => {
+  it("maps advanced DNS and disk-allocation settings", () => {
+    expect(optionsFor(DEFAULT_SETTINGS)).toMatchObject({
+      "async-dns": "true",
+      "file-allocation": "prealloc",
+    });
+    expect(optionsFor({
+      ...DEFAULT_SETTINGS,
+      fasterDnsFallback: true,
+      diskAllocation: "falloc",
+    })).toMatchObject({
+      "async-dns": "false",
+      "file-allocation": "falloc",
+    });
+    expect(optionsFor({
+      ...DEFAULT_SETTINGS,
+      diskAllocation: "none",
+    })["file-allocation"]).toBe("none");
+  });
+
   it("clears proxy options when proxy mode is none and maps default seeding and files", () => {
     const options = optionsFor(DEFAULT_SETTINGS);
     expect(options).toMatchObject({

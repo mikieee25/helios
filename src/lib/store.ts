@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
   requestPermission,
@@ -53,6 +54,8 @@ export type Settings = {
   seedTimeHours: number | "";
   neverSeed: boolean;
   fileConflict: "rename" | "overwrite" | "error";
+  fasterDnsFallback: boolean;
+  diskAllocation: "none" | "prealloc" | "falloc";
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,6 +76,8 @@ export const DEFAULT_SETTINGS: Settings = {
   seedTimeHours: "",
   neverSeed: false,
   fileConflict: "rename",
+  fasterDnsFallback: false,
+  diskAllocation: "prealloc",
 };
 export const N = 48;
 export const ARIA2_URL =
@@ -163,6 +168,7 @@ let stoppedRevision = 1;
 let loadedStoppedRevision = 0;
 let stoppedCache: Record<string, any>[] = [];
 let refreshTicks = 0;
+let unlistenBridgeAdded: UnlistenFn | undefined;
 let aria2DefaultDir: string | undefined;
 const seen = new Map<string, number>();
 const pendingCompletions = new Set<string>();
@@ -216,12 +222,11 @@ function toTask(r: any): Task | undefined {
             : undefined;
   if (!state) return undefined;
   const paths = files.map((file) => file.path);
-  const name =
-    r.bittorrent?.info?.name ?? paths[0]?.split(/[\\/]/).pop() ?? r.gid;
+  const name = r.bittorrent?.info?.name ?? paths[0]?.split(/[\\/]/).pop() ?? "";
   if (state === "dl" && !seen.has(r.gid)) seen.set(r.gid, Date.now());
   return {
     gid: r.gid,
-    name: name || r.gid,
+    name: name || (state === "dl" ? "Connecting..." : r.gid),
     size,
     done: size ? completed / size : 0,
     speed: +r.downloadSpeed,
@@ -279,6 +284,8 @@ export function optionsFor(settings: Settings, defaultDir?: string) {
     "max-concurrent-downloads": String(settings.maxConcurrent),
     "max-connection-per-server": String(settings.connectionsPerServer),
     split: String(settings.connectionsPerServer),
+    "async-dns": String(!settings.fasterDnsFallback),
+    "file-allocation": settings.diskAllocation,
     "all-proxy":
       settings.proxyMode === "manual" ? settings.proxyUrl.trim() : "",
     "all-proxy-user": settings.proxyMode === "manual" ? settings.proxyUser : "",
@@ -477,6 +484,13 @@ export const useStore = create<S>((set, get) => {
     let url = ARIA2_URL;
     rpcSecret = BROWSER_SECRET;
     if (inTauri()) {
+      unlistenBridgeAdded?.();
+      unlistenBridgeAdded = await listen<{ gids: string[] }>(
+        "bridge://added",
+        ({ payload }) => {
+          if (payload.gids.length) void refresh(true);
+        }
+      );
       await invoke("bridge_set_enabled", {
         enabled: loadedSettings.bridgeEnabled,
       });
@@ -626,6 +640,8 @@ export const useStore = create<S>((set, get) => {
       if (shutdownPromise) return shutdownPromise;
       shutdownRequested = true;
       if (refreshTimer) clearInterval(refreshTimer);
+      unlistenBridgeAdded?.();
+      unlistenBridgeAdded = undefined;
       const deadline = Date.now() + 3000;
       const beforeDeadline = <T>(promise: Promise<T>) => {
         let timer: ReturnType<typeof setTimeout> | undefined;

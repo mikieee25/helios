@@ -2,7 +2,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DEFAULT_SETTINGS, useStore, validateProxy } from "@/lib/store";
+import { DEFAULT_SETTINGS, useStore, validateProxy, type Settings } from "@/lib/store";
 
 function NumberSetting({
   label,
@@ -110,6 +110,7 @@ function BrowserBridgeSettings({
 }) {
   const [bridge, setBridge] = useState<BridgeState>();
   const [clients, setClients] = useState<BridgeClient[]>([]);
+  const [handoffTimings, setHandoffTimings] = useState<number[]>([]);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const previousClientIds = useRef<Set<string> | null>(null);
@@ -131,6 +132,19 @@ function BrowserBridgeSettings({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const loadTimings = () => {
+      void invoke<number[]>("bridge_get_timings")
+        .then((timings) => { if (active) setHandoffTimings(timings); })
+        .catch(() => {});
+    };
+    loadTimings();
+    const timer = window.setInterval(loadTimings, 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [enabled]);
 
   useEffect(() => {
     if (!bridge?.pairingCode) return;
@@ -209,6 +223,15 @@ function BrowserBridgeSettings({
         onAction={() => void refresh()}
       />
       <div className="settings-panel">
+        <div className="setting-field">
+          <span className="setting-label">
+            <b>Last hand-off</b>
+            <small>Time from receiving the browser request until aria2 accepts it</small>
+          </span>
+          <span className="browser-bridge-status">
+            {handoffTimings.length ? `${handoffTimings[handoffTimings.length - 1]} ms` : "—"}
+          </span>
+        </div>
         <label className="setting-field setting-check">
           <span className="setting-label">
             <b>Allow paired browser extensions to add downloads</b>
@@ -634,6 +657,44 @@ export default function Settings() {
               : "aria2 stops seeding when either limit is reached."}
           </p>
         )}
+        <p className="settings-section-note">Applies to new downloads only.</p>
+      </section>
+      <section className="settings-section" aria-labelledby="advanced-settings-title">
+        <SectionHeading
+          title="Advanced"
+          description="Tune DNS lookup and disk allocation for new downloads."
+          onReset={() => void update({
+            fasterDnsFallback: DEFAULT_SETTINGS.fasterDnsFallback,
+            diskAllocation: DEFAULT_SETTINGS.diskAllocation,
+          })}
+        />
+        <div className="settings-panel">
+          <label className="setting-field setting-check">
+            <span className="setting-label">
+              <b>Faster DNS fallback</b>
+              <small>Use the system DNS resolver instead of aria2’s asynchronous resolver.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.fasterDnsFallback}
+              onChange={(event) => void update({ fasterDnsFallback: event.target.checked })}
+            />
+          </label>
+          <label className="setting-field">
+            <span className="setting-label">
+              <b>Disk allocation</b>
+              <small>Prealloc reserves file space, falloc allocates quickly where supported, and none skips allocation.</small>
+            </span>
+            <select
+              value={settings.diskAllocation}
+              onChange={(event) => void update({ diskAllocation: event.target.value as Settings["diskAllocation"] })}
+            >
+              <option value="none">None</option>
+              <option value="prealloc">Preallocate</option>
+              <option value="falloc">Fast allocation</option>
+            </select>
+          </label>
+        </div>
         <p className="settings-section-note">Applies to new downloads only.</p>
       </section>
       {inTauri && (

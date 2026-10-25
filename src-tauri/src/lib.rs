@@ -37,6 +37,8 @@ fn aria2_args(port: u16, secret: &str, session: &str, dir: &str) -> Vec<String> 
         format!("--rpc-secret={secret}"),
         "--rpc-listen-all=false".into(),
         "--continue=true".into(),
+        "--connect-timeout=10".into(),
+        "--retry-wait=2".into(),
         "--split=16".into(),
         "--max-connection-per-server=16".into(),
         "--min-split-size=1M".into(),
@@ -377,6 +379,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_rpc_config,
             bridge::bridge_get_state,
+            bridge::bridge_get_timings,
             bridge::bridge_set_enabled,
             bridge::bridge_start_pairing,
             bridge::bridge_cancel_pairing,
