@@ -1,15 +1,24 @@
 name: Release
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing v-prefixed tag to release
+      bump:
+        description: Version bump to apply and release
         required: true
-        type: string
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 env:
   # Update both values together when moving to another verified aria2 Windows release.
@@ -17,14 +26,66 @@ env:
   ARIA2_SHA256: "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
 
 jobs:
+  prepare:
+    name: Bump version and push release tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Require main branch
+        run: test "$GITHUB_REF_NAME" = main
+
+      - name: Bump, commit, tag, and push
+        id: bump
+        run: |
+          version="$(node scripts/bump-version.mjs "${{ inputs.bump }}" --write)"
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists on origin." >&2
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "Could not check whether tag $tag exists on origin." >&2
+              exit "$status"
+            fi
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore: release $tag"
+          git tag -a "$tag" -m "Helios $tag"
+          git push --atomic origin HEAD:main "$tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build Windows x64 installer
+    needs: prepare
+    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: windows-latest
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag || github.ref }}
 
       - name: Set up Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -46,7 +107,7 @@ jobs:
       - name: Check release versions
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
         run: |
           $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
@@ -104,7 +165,8 @@ jobs:
 
   release:
     name: Attest and draft release
-    needs: build
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: windows-latest
     permissions:
       actions: read
@@ -112,7 +174,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
     steps:
       - name: Download built installer
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5

@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "release:patch": "node scripts/bump-version.mjs patch --write",
+    "release:minor": "node scripts/bump-version.mjs minor --write",
+    "release:major": "node scripts/bump-version.mjs major --write"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.22",

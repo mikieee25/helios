@@ -1,7 +1,10 @@
 # Helios
 
-A fast download manager: **Next.js** UI (static export) in a **Tauri 2** shell, with **aria2** as the engine.
-The UI talks to aria2 over its JSON-RPC WebSocket. Rust only starts aria2 and owns the window.
+Helios is a personal desktop download manager for direct links and BitTorrent downloads. It combines an **aria2** transfer engine with a **Next.js** interface exported as static files and hosted in a **Tauri 2** desktop window. The interface sends commands and receives transfer updates through aria2's JSON-RPC WebSocket; the Rust side of the app starts and manages the aria2 process and the native window.
+
+Use Helios to add HTTP, HTTPS, FTP, magnet, or `.torrent` sources, choose files from a torrent, monitor progress and transfer statistics, and manage completed downloads. Settings include the destination folder, bandwidth limits, proxy configuration, seeding limits, and file-conflict handling. The app can also keep running in the system tray.
+
+The current automated installer targets **Windows x64**. The Tauri project can be built for other desktop platforms when their platform-specific prerequisites and aria2 sidecar are available. Helios is currently intended for personal use.
 
 ## Try the UI in a browser (no Rust needed)
 
@@ -44,6 +47,14 @@ gh attestation verify .\Helios_0.1.0_x64-setup.exe --repo mikieee25/helios
 ```
 
 Releases are not code-signed yet, so Windows SmartScreen may warn. Select **More info** > **Run anyway** only after verifying the checksum and provenance.
+
+## Release a new version
+
+In GitHub, open **Actions** > **Release** > **Run workflow**, select `main` as the branch, choose `patch`, `minor`, or `major`, then run it. The workflow bumps the versions on `main`, commits the change, pushes an annotated version tag, builds the Windows installer, and creates a draft release.
+
+Repository settings must allow the workflow to push: under **Settings** > **Actions** > **General** > **Workflow permissions**, select **Read and write permissions**. Branch protection on `main` blocks the bot's push unless the bot is allowed to bypass the protection rules.
+
+If a run fails after the tag was pushed, delete any unpublished draft release and delete the pushed tag, then run the workflow again.
 
 ## Layout
 
