@@ -11,6 +11,7 @@ function NumberSetting({
   max,
   step = 1,
   unit,
+  description,
   update,
 }: {
   label: string;
@@ -19,6 +20,7 @@ function NumberSetting({
   max?: number;
   step?: number;
   unit?: string;
+  description?: string;
   update(value: number): void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -28,7 +30,10 @@ function NumberSetting({
   }, [value]);
   return (
     <label className="setting-field">
-      <span>{label}</span>
+      <span className="setting-label">
+        <b>{label}</b>
+        {description && <small>{description}</small>}
+      </span>
       <span className="setting-input">
         <input
           ref={inputRef}
@@ -56,16 +61,27 @@ function NumberSetting({
 function SectionHeading({
   title,
   onReset,
+  actionLabel = "Reset section",
+  onAction,
+  description,
 }: {
   title: string;
-  onReset(): void;
+  onReset?: () => void;
+  actionLabel?: string;
+  onAction?: () => void;
+  description?: string;
 }) {
   return (
     <div className="settings-section-heading">
-      <h2 id={`${title.toLowerCase()}-settings-title`}>{title}</h2>
-      <button type="button" onClick={onReset}>
-        Reset section
-      </button>
+      <div>
+        <h2 id={`${title.toLowerCase().replace(/\s+/g, "-")}-settings-title`}>{title}</h2>
+        {description && <p className="settings-section-subtitle">{description}</p>}
+      </div>
+      {(onReset || onAction) && (
+        <button type="button" onClick={onAction ?? onReset}>
+          {onAction ? actionLabel : "Reset section"}
+        </button>
+      )}
     </div>
   );
 }
@@ -185,81 +201,79 @@ function BrowserBridgeSettings({
   }
 
   return (
-    <section className="settings-section" aria-labelledby="bridge-settings-title">
-      <div className="settings-section-heading">
-        <h2 id="bridge-settings-title">Browser integration</h2>
-        <button type="button" onClick={() => void refresh()}>
-          Refresh
-        </button>
-      </div>
-      <label className="setting-field setting-check">
-        <span>Allow paired browser extensions to add downloads</span>
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => void setBridgeEnabled(event.target.checked)}
-        />
-      </label>
-      <p className="settings-section-note">
-        {enabled && bridge
-          ? "On · Listening for paired browser extensions."
-          : enabled
-            ? "Starting browser integration…"
-            : "Off · Browser extensions cannot connect."}
-      </p>
-      {bridge && (
-        <p className="settings-section-note">Local port: 127.0.0.1:{bridge.port}</p>
-      )}
-      {enabled && bridge && (
-        <>
-          <div className="browser-pairing-actions">
-            {!bridge.pairingCode && (
-              <button type="button" onClick={() => void startPairing()}>
-                Pair a browser
-              </button>
-            )}
-            {bridge.paired && !bridge.pairingCode && (
-              <span className="browser-bridge-status">Browser paired</span>
-            )}
-          </div>
-          {bridge.pairingCode && (
-            <div className="browser-pairing-card">
-              <div>
-                <span className="settings-section-note">Enter this code in your browser extension</span>
-                <code className="bridge-pairing-code">{bridge.pairingCode}</code>
-                <span className="browser-pairing-countdown" aria-live="polite">
-                  Expires in {formatCountdown(bridge.pairingExpiresAt, now)}
-                </span>
-              </div>
-              <button type="button" className="secondary-button" onClick={() => void cancelPairing()}>
-                Cancel
-              </button>
-            </div>
-          )}
-        </>
-      )}
-      {bridge && (
-        <div className="settings-section-fields bridge-client-list">
-          {clients.map((client) => (
-            <div className="setting-field" key={client.id}>
-              <span>
-                {client.label}
-                <small>
-                  Created {new Date(client.createdAt * 1000).toLocaleString()} · {client.lastUsed
-                    ? `Last used ${new Date(client.lastUsed * 1000).toLocaleString()}`
-                    : "Not used yet"}
-                </small>
+    <section className="settings-section" aria-labelledby="browser-integration-settings-title">
+      <SectionHeading
+        title="Browser integration"
+        description="Let a paired browser extension send downloads to Helios."
+        actionLabel="Refresh"
+        onAction={() => void refresh()}
+      />
+      <div className="settings-panel">
+        <label className="setting-field setting-check">
+          <span className="setting-label">
+            <b>Allow paired browser extensions to add downloads</b>
+            <small>{enabled && bridge
+              ? `On · Listening on 127.0.0.1:${bridge.port}`
+              : enabled
+                ? "Starting browser integration…"
+                : "Off · Browser extensions cannot connect."}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => void setBridgeEnabled(event.target.checked)}
+          />
+        </label>
+        {enabled && bridge && (
+          <>
+            <div className="setting-field">
+              <span className="setting-label">
+                <b>Pair a browser</b>
+                <small>Get a one-time code to enter in the extension</small>
               </span>
-              <button type="button" onClick={() => void revoke(client.id)}>
-                Revoke
-              </button>
+              {bridge.pairingCode ? (
+                <span className="browser-bridge-status">Pairing code active</span>
+              ) : (
+                <button type="button" className="settings-action-button" onClick={() => void startPairing()}>
+                  Pair a browser
+                </button>
+              )}
             </div>
-          ))}
-          {!clients.length && (
-            <p className="settings-section-note">No browsers paired.</p>
-          )}
-        </div>
-      )}
+            {bridge.pairingCode && (
+              <div className="browser-pairing-card">
+                <div>
+                  <span className="settings-section-note">Enter this code in your browser extension</span>
+                  <code className="bridge-pairing-code">{bridge.pairingCode}</code>
+                  <span className="browser-pairing-countdown" aria-live="polite">
+                    Expires in {formatCountdown(bridge.pairingExpiresAt, now)}
+                  </span>
+                </div>
+                <button type="button" className="secondary-button" onClick={() => void cancelPairing()}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </>
+        )}
+        {bridge && clients.map((client) => (
+          <div className="setting-field" key={client.id}>
+            <span className="setting-label">
+              <b>{client.label}</b>
+              <small>
+                Paired {new Date(client.createdAt * 1000).toLocaleString()} · {client.lastUsed
+                  ? `Last used ${new Date(client.lastUsed * 1000).toLocaleString()}`
+                  : "Not used yet"}
+              </small>
+            </span>
+            <button type="button" className="settings-text-button danger" onClick={() => void revoke(client.id)}>
+              Revoke
+            </button>
+          </div>
+        ))}
+        {bridge && !clients.length && (
+          <p className="settings-section-note">No browsers paired yet.</p>
+        )}
+      </div>
       {error && (
         <p className="settings-error" role="alert">
           {error}
@@ -329,19 +343,32 @@ export default function Settings() {
       <div className="settings-heading">
         <div>
           <div className="lbl">Settings</div>
-          <h1>Download preferences</h1>
+          <h1>Preferences</h1>
         </div>
         <button onClick={() => useStore.getState().setView("tasks")}>
           Back
         </button>
       </div>
-      <div className="settings-fields">
+      <section className="settings-section" aria-labelledby="downloads-settings-title">
+        <SectionHeading
+          title="Downloads"
+          description="Limits and where files are saved."
+          onReset={() => void update({
+            maxDownloadMB: DEFAULT_SETTINGS.maxDownloadMB,
+            maxUploadMB: DEFAULT_SETTINGS.maxUploadMB,
+            maxConcurrent: DEFAULT_SETTINGS.maxConcurrent,
+            connectionsPerServer: DEFAULT_SETTINGS.connectionsPerServer,
+            downloadDir: DEFAULT_SETTINGS.downloadDir,
+          })}
+        />
+        <div className="settings-panel">
         <NumberSetting
           label="Maximum download speed"
           value={settings.maxDownloadMB}
           min={0}
           step={0.1}
-          unit="MB/s · 0 unlimited"
+          description="0 means unlimited"
+          unit="MB/s"
           update={(value) => void update({ maxDownloadMB: value })}
         />
         <NumberSetting
@@ -349,13 +376,16 @@ export default function Settings() {
           value={settings.maxUploadMB}
           min={0}
           step={0.1}
-          unit="MB/s · 0 unlimited"
+          description="0 means unlimited"
+          unit="MB/s"
           update={(value) => void update({ maxUploadMB: value })}
         />
         <NumberSetting
           label="Maximum concurrent downloads"
           value={settings.maxConcurrent}
           min={1}
+          max={20}
+          description="How many downloads can run at once"
           update={(value) => void update({ maxConcurrent: Math.round(value) })}
         />
         <NumberSetting
@@ -363,6 +393,7 @@ export default function Settings() {
           value={settings.connectionsPerServer}
           min={1}
           max={16}
+          description="Per download server"
           update={(value) =>
             void update({ connectionsPerServer: Math.round(value) })
           }
@@ -370,54 +401,75 @@ export default function Settings() {
         {inTauri && (
           <>
             <div className="setting-field folder-field">
-              <span>Download folder</span>
+              <span className="setting-label">
+                <b>Download folder</b>
+                <small>Where new downloads are saved</small>
+              </span>
               <span className="folder-choice">
-                {settings.downloadDir || "Default Downloads folder"}
+                <span className="folder-current" title={settings.downloadDir || "Default Downloads folder"}>
+                  {settings.downloadDir || "Default Downloads folder"}
+                </span>
                 <span>
-                  <button onClick={() => void chooseFolder()}>
+                  <button className="settings-text-button" onClick={() => void chooseFolder()}>
                     Choose folder
                   </button>
                   {settings.downloadDir && (
-                    <button onClick={() => void update({ downloadDir: "" })}>
+                    <button className="settings-text-button" onClick={() => void update({ downloadDir: "" })}>
                       Use default
                     </button>
                   )}
                 </span>
               </span>
             </div>
-            <label className="setting-field setting-check">
-              <span>Close button hides to tray</span>
-              <input
-                type="checkbox"
-                checked={settings.closeToTray}
-                onChange={(event) =>
-                  void update({ closeToTray: event.target.checked })
-                }
-              />
-            </label>
-            <label className="setting-field setting-check">
-              <span>Start with Windows</span>
-              <input
-                type="checkbox"
-                checked={settings.startWithWindows}
-                onChange={(event) => void updateAutostart(event.target.checked)}
-              />
-            </label>
           </>
         )}
-      </div>
-      {inTauri && (
-        <BrowserBridgeSettings
-          enabled={settings.bridgeEnabled}
-          update={(bridgeEnabled) => update({ bridgeEnabled })}
+        </div>
+        <p className="settings-section-note">Speed limits and download folder apply to new downloads. Concurrent download limits apply immediately.</p>
+      </section>
+      <section className="settings-section" aria-labelledby="files-settings-title">
+        <SectionHeading
+          title="Files"
+          description="Choose what happens when a file already exists."
+          onReset={() => void update({ fileConflict: DEFAULT_SETTINGS.fileConflict })}
         />
-      )}
+        <div className="settings-panel">
+          <label className="setting-field">
+            <span className="setting-label">
+              <b>When a file already exists</b>
+            </span>
+            <select
+              value={settings.fileConflict}
+              onChange={(event) =>
+                void update({ fileConflict: event.target.value as typeof settings.fileConflict })
+              }
+            >
+              <option value="rename">Rename</option>
+              <option value="overwrite">Overwrite</option>
+              <option value="error">Show error</option>
+            </select>
+          </label>
+        </div>
+        <p className="settings-section-note">
+          {settings.fileConflict === "rename"
+            ? "Keep the existing file and save the new download under a renamed file."
+            : settings.fileConflict === "overwrite"
+              ? "Replace the existing file with the new download."
+              : "Keep the existing file and stop with an error if the name conflicts."}
+        </p>
+        {settings.fileConflict === "overwrite" && (
+          <p className="settings-section-note settings-warning">
+            Existing files can be permanently replaced.
+          </p>
+        )}
+        <p className="settings-section-note">Applies to new downloads only.</p>
+      </section>
       <section
         className="settings-section"
         aria-labelledby="network-settings-title"
       >
         <SectionHeading
           title="Network"
+          description="Choose a proxy for new downloads."
           onReset={() => {
             const reset = {
               proxyMode: DEFAULT_SETTINGS.proxyMode,
@@ -431,6 +483,7 @@ export default function Settings() {
             void update(reset);
           }}
         />
+        <div className="settings-panel">
         <label className="setting-field">
           <span>Proxy</span>
           <select
@@ -494,6 +547,7 @@ export default function Settings() {
             </label>
           </div>
         )}
+        </div>
         {proxyError && (
           <p className="settings-error inline-settings-error" role="alert">
             {proxyError}
@@ -510,6 +564,7 @@ export default function Settings() {
       >
         <SectionHeading
           title="Seeding"
+          description="Seeding stops when either limit is reached."
           onReset={() =>
             void update({
               seedRatio: DEFAULT_SETTINGS.seedRatio,
@@ -518,18 +573,21 @@ export default function Settings() {
             })
           }
         />
-        <div className="settings-fields seeding-fields">
+        <div className="settings-panel settings-fields seeding-fields">
           <NumberSetting
             label="Stop at share ratio"
             value={settings.seedRatio}
             min={0}
             max={1000}
             step={0.1}
-            unit="0 disables ratio limit"
+          description="0 disables the ratio limit"
             update={(value) => void update({ seedRatio: value })}
           />
           <label className="setting-field">
-            <span>Maximum seeding time</span>
+            <span className="setting-label">
+              <b>Maximum seeding time</b>
+              <small>Leave empty for no time limit</small>
+            </span>
             <span className="setting-input">
               <input
                 type="number"
@@ -546,11 +604,14 @@ export default function Settings() {
                   })
                 }
               />
-              <small>hours · empty is unlimited</small>
+              <small>hours</small>
             </span>
           </label>
           <label className="setting-field setting-check">
-            <span>Never seed</span>
+            <span className="setting-label">
+              <b>Never seed</b>
+              <small>Stop as soon as a torrent completes</small>
+            </span>
             <input
               type="checkbox"
               checked={settings.neverSeed}
@@ -575,46 +636,44 @@ export default function Settings() {
         )}
         <p className="settings-section-note">Applies to new downloads only.</p>
       </section>
-      <section
-        className="settings-section"
-        aria-labelledby="files-settings-title"
-      >
-        <SectionHeading
-          title="Files"
-          onReset={() =>
-            void update({ fileConflict: DEFAULT_SETTINGS.fileConflict })
-          }
+      {inTauri && (
+        <BrowserBridgeSettings
+          enabled={settings.bridgeEnabled}
+          update={(bridgeEnabled) => update({ bridgeEnabled })}
         />
-        <label className="setting-field">
-          <span>When a file already exists</span>
-          <select
-            value={settings.fileConflict}
-            onChange={(event) =>
-              void update({
-                fileConflict: event.target
-                  .value as typeof settings.fileConflict,
-              })
-            }
-          >
-            <option value="rename">Rename</option>
-            <option value="overwrite">Overwrite</option>
-            <option value="error">Show error</option>
-          </select>
-        </label>
-        <p className="settings-section-note">
-          {settings.fileConflict === "rename"
-            ? "Keep the existing file and save the new download under a renamed file."
-            : settings.fileConflict === "overwrite"
-              ? "Replace the existing file with the new download."
-              : "Keep the existing file and stop with an error if the name conflicts."}
-        </p>
-        {settings.fileConflict === "overwrite" && (
-          <p className="settings-section-note settings-warning">
-            Existing files can be permanently replaced.
-          </p>
-        )}
-        <p className="settings-section-note">Applies to new downloads only.</p>
-      </section>
+      )}
+      {inTauri && (
+        <section className="settings-section settings-app" aria-labelledby="app-settings-title">
+          <SectionHeading
+            title="App"
+            onReset={() => void update({
+              closeToTray: DEFAULT_SETTINGS.closeToTray,
+              startWithWindows: DEFAULT_SETTINGS.startWithWindows,
+            })}
+          />
+          <div className="settings-panel">
+            <label className="setting-field setting-check">
+              <span className="setting-label">
+                <b>Close button hides to tray</b>
+                <small>Keep downloads running in the background</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.closeToTray}
+                onChange={(event) => void update({ closeToTray: event.target.checked })}
+              />
+            </label>
+            <label className="setting-field setting-check">
+              <span className="setting-label"><b>Start with Windows</b></span>
+              <input
+                type="checkbox"
+                checked={settings.startWithWindows}
+                onChange={(event) => void updateAutostart(event.target.checked)}
+              />
+            </label>
+          </div>
+        </section>
+      )}
       {error && (
         <p className="settings-error" role="alert">
           Could not apply settings: {error}
