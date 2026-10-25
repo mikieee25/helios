@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Helios",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "app.helios.downloads",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -29,11 +29,19 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/aria2c"],
-    "targets": ["nsis"],
-    "resources": ["licenses/"],
+    "externalBin": [
+      "binaries/aria2c"
+    ],
+    "targets": [
+      "nsis"
+    ],
+    "resources": [
+      "licenses/"
+    ],
     "windows": {
-      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
       "nsis": {
         "installerIcon": "icons/icon.ico"
       }
@@ -47,12 +55,22 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["torrent"],
+        "ext": [
+          "torrent"
+        ],
         "name": "BitTorrent file",
         "mimeType": "application/x-bittorrent",
         "role": "Viewer"
       }
     ]
   },
-  "plugins": { "deep-link": { "desktop": { "schemes": ["magnet"] } } }
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "magnet"
+        ]
+      }
+    }
+  }
 }
