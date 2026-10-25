@@ -340,11 +340,7 @@ export default function TaskTable() {
   return (
     <div className="tbl">
       <div className="task-table-toolbar">
-        <span className="lbl">Downloads</span>
-        {!isHistory && <div className="table-header-actions">
-          <button className="secondary-button" disabled={!online} onClick={() => void run(() => useStore.getState().pauseAll())}>Pause all</button>
-          <button className="secondary-button" disabled={!online} onClick={() => void run(() => useStore.getState().resumeAll())}>Resume all</button>
-        </div>}
+        <span className="lbl">Downloads <span className="download-count">{rows.length}</span></span>
       </div>
       {selectedTasks.length > 0 && !isHistory && <div className="selection-bar" role="toolbar" aria-label={`${selectedTasks.length} downloads selected`}>
         <span>{selectedTasks.length} selected</span>

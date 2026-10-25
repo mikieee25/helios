@@ -253,15 +253,17 @@ export const useStore = create<S>((set, get) => {
       const activeWaiting = [...r[0][0], ...r[1][0]];
       const activeGids = new Set(activeWaiting.map((task: any) => task.gid));
       const old = new Map(get().tasks.map((t) => [t.gid, t]));
-      const tasks = [
+      const taskByGid = new Map<string, Task>();
+      for (const rawTask of [
         ...activeWaiting,
         ...stoppedCache.filter((task) => !activeGids.has(task.gid)),
-      ]
-        .map(toTask)
-        .map((t) => {
-          const o = old.get(t.gid);
-          return o && same(o, t) ? o : t;
-        });
+      ]) {
+        const task = toTask(rawTask);
+        if (taskByGid.has(task.gid)) continue;
+        const previous = old.get(task.gid);
+        taskByGid.set(task.gid, previous && same(previous, task) ? previous : task);
+      }
+      const tasks = [...taskByGid.values()];
       const g = r[statIndex][0];
       const { dlHist, upHist } = get();
       clock.t = performance.now();
@@ -556,7 +558,7 @@ export const useStore = create<S>((set, get) => {
     },
     async removeTask(task, alsoDeleteFiles = false) {
       if (!api) throw new Error("aria2 is not connected");
-      if (task.state === "dl" || task.state === "seed" || task.queued)
+      if (task.state === "dl" || task.state === "seed" || task.state === "pa" || task.queued)
         await api.call("forceRemove", task.gid);
       else await api.call("removeDownloadResult", task.gid);
       void refresh(true);

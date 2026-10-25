@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react'
 import { useStore, clock, N } from '@/lib/store'
 
-const W = 560, H = 286, HEAD = W - 8, step = W / (N - 1)
+const W = 560, H = 286, HEAD = W - 6.25, step = W / (N - 1)
 
 // Catmull-Rom to cubic Bezier; control x is clamped so a short head segment cannot kink.
 function curve(p: number[][]) {
@@ -52,7 +52,7 @@ export default function Chart() {
       if (f > .001) p.push([HEAD, y(v[M - 2] + (v[M - 1] - v[M - 2]) * f)])
       const d = curve(p), e = p[p.length - 1]
       line.setAttribute('d', d)
-      fill.setAttribute('d', `${d} L${e[0].toFixed(1)},${H} L${p[0][0].toFixed(1)},${H}Z`)
+      fill.setAttribute('d', `${d} L${W},${e[1].toFixed(1)} L${W},${H} L${p[0][0].toFixed(1)},${H}Z`)
       for (const el of [dot, glow]) { el.setAttribute('cx', e[0].toFixed(1)); el.setAttribute('cy', e[1].toFixed(1)) }
       svg.style.setProperty('--mix', `${(mix * 100).toFixed(1)}%`)
       raf = requestAnimationFrame(frame)

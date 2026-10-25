@@ -84,10 +84,14 @@ svg.i {
 .bar .l {
   gap: 10px;
 }
+.bar .r .transfer-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .bar .r .add-download {
   width: 30px;
   height: 30px;
-  margin-left: 2px;
   border-radius: 8px;
   background: var(--sel);
   color: var(--cy);
@@ -95,6 +99,18 @@ svg.i {
 .bar .r .add-download:hover {
   background: var(--chip);
 }
+.bar .r .transfer-action {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--sel);
+  color: var(--mut);
+}
+.bar .r .transfer-action:hover:not(:disabled) { background: var(--chip); color: var(--tx); }
+.bar .r .transfer-action:disabled { opacity: .4; cursor: default; }
+.bar .r .transfer-action svg.i { width: 16px; height: 16px; }
 .bar .r .add-download svg.i {
   width: 18px;
   height: 18px;
@@ -589,7 +605,8 @@ svg.i {
 .task-table-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 8px; }
 .task-table-toolbar .add-button { margin-left: auto; }
 .task-table-toolbar .lbl { margin: 0; }
-.table-header-actions, .selection-bar { display: flex; align-items: center; gap: 8px; }
+.selection-bar { display: flex; align-items: center; gap: 8px; }
+.download-count { margin-left: 7px; color: var(--cy); }
 .selection-bar { min-height: 42px; margin: 0 4px 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--row); color: var(--mut); }
 .selection-bar .secondary-button { min-height: 30px; padding: 5px 10px; }
 .selection-clear { margin-left: auto; color: var(--dim); font-size: 20px; }

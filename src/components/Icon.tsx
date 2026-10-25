@@ -6,7 +6,7 @@ const P: Record<string, string> = {
   video: 'M8 5l11 7-11 7z', bell: 'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
   moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',
   sliders: 'M4 7h9M17 7h3M4 17h3M11 17h9M13 7a2 2 0 1 0 4 0a2 2 0 1 0-4 0M7 17a2 2 0 1 0 4 0a2 2 0 1 0-4 0',
-  chev: 'M9 6l6 6-6 6', pause: 'M9 6v12M15 6v12', check: 'M5 12.5l4.5 4.5L19 7',
+  chev: 'M9 6l6 6-6 6', pause: 'M9 6v12M15 6v12', play: 'M8 5v14l11-7z', check: 'M5 12.5l4.5 4.5L19 7',
   min: 'M5 12h14', max: 'M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z',
   x: 'M6 6l12 12M18 6 6 18', dots: 'M6 12h.01M10 12h.01',
   plus: 'M12 5v14M5 12h14', trash: 'M4 7h16M10 11v6M14 11v6M5 7l1 14h12l1-14M9 7V4h6v3',
