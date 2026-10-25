@@ -12,6 +12,7 @@ import Stats from "@/components/Stats";
 import Settings from "@/components/Settings";
 import AddDialog from "@/components/AddDialog";
 import SelectFilesDialog from "@/components/SelectFilesDialog";
+import type { BridgeAddItem } from "@/lib/bridge";
 
 type SelectionRequest = {
   gid: string;
@@ -25,6 +26,7 @@ export default function Page() {
   const [addOpen, setAddOpen] = useState(false);
   const [dropLinks, setDropLinks] = useState<string>();
   const [dropPath, setDropPath] = useState<string>();
+  const [bridgeItems, setBridgeItems] = useState<BridgeAddItem[]>();
   const [selectionQueue, setSelectionQueue] = useState<SelectionRequest[]>([]);
   const enqueueSelection = useCallback(
     (gid: string, _metadata: boolean, cleanupGids?: string[]) => {
@@ -39,10 +41,22 @@ export default function Page() {
     setAddOpen(false);
     setDropLinks(undefined);
     setDropPath(undefined);
+    setBridgeItems(undefined);
   }, []);
   const openFromDrop = useCallback((links?: string, path?: string) => {
+    setBridgeItems(undefined);
     setDropLinks(links);
     setDropPath(path);
+    setAddOpen(true);
+  }, []);
+  const openFromBridge = useCallback(async (items: BridgeAddItem[]) => {
+    const win = getCurrentWindow();
+    await win.show();
+    await win.unminimize();
+    await win.setFocus();
+    setDropPath(undefined);
+    setBridgeItems(items);
+    setDropLinks(items.map((item) => item.url).join("\n"));
     setAddOpen(true);
   }, []);
   useEffect(() => {
@@ -112,6 +126,12 @@ export default function Page() {
           () => void useStore.getState().resumeAll()
         ),
         listen("helios://quit", () => void shutdownAndDestroy()),
+        listen<{ items: BridgeAddItem[] }>("bridge://add", (event) =>
+          void openFromBridge(event.payload.items)
+        ),
+        listen<{ name: string }>("bridge://started", (event) =>
+          void useStore.getState().notifyAddedDownload(event.payload.name)
+        ),
       ])
         .then(async (unlisteners) => {
           if (disposed) {
@@ -144,7 +164,7 @@ export default function Page() {
       window.removeEventListener("paste", onPaste);
       window.removeEventListener("keydown", onShortcut);
     };
-  }, []);
+  }, [openFromBridge]);
 
   return (
     <div className="win">
@@ -153,6 +173,7 @@ export default function Page() {
         open={addOpen}
         initialLinks={dropLinks}
         initialPath={dropPath}
+        initialBridgeItems={bridgeItems}
         onDropOpen={openFromDrop}
         onSelectFiles={enqueueSelection}
         onClose={closeAdd}

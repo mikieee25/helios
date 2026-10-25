@@ -34,7 +34,7 @@ export type Task = {
   errorMessage: string;
   errorCode: string;
 };
-export type AddOptions = Record<string, string>;
+export type AddOptions = Record<string, string | string[]>;
 export type Settings = {
   maxDownloadMB: number;
   maxUploadMB: number;
@@ -126,6 +126,7 @@ interface S {
   setSeries(s: "dl" | "ul"): void;
   setView(v: "tasks" | "settings"): void;
   setNotify(v: boolean): void;
+  notifyAddedDownload(name: string): Promise<void>;
   updateSettings(settings: Partial<Settings>): Promise<void>;
   updateAutostart(enabled: boolean): Promise<void>;
   clearHistory(): Promise<void>;
@@ -570,6 +571,21 @@ export const useStore = create<S>((set, get) => {
         Notification.permission === "default"
       )
         void Notification.requestPermission();
+    },
+    async notifyAddedDownload(name) {
+      if (!get().notify) return;
+      try {
+        const body = `Added: ${name}`;
+        if (inTauri()) {
+          if (await isPermissionGranted())
+            sendNotification({ title: "Helios", body });
+        } else if (
+          typeof Notification !== "undefined" &&
+          Notification.permission === "granted"
+        ) new Notification(body);
+      } catch (error) {
+        console.error("Could not show download notification.", error);
+      }
     },
     async updateSettings(update) {
       const settings = { ...get().settings, ...update };

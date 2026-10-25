@@ -257,6 +257,10 @@ impl BridgeService {
         Ok(self.state())
     }
 
+    fn cancel_pairing(&self) {
+        self.inner.pairing.lock().unwrap().clear();
+    }
+
     fn list_clients(&self) -> Vec<BridgeClient> {
         self.inner
             .clients
@@ -309,6 +313,11 @@ pub fn bridge_set_enabled(service: State<'_, BridgeService>, enabled: bool) -> B
 #[tauri::command]
 pub fn bridge_start_pairing(service: State<'_, BridgeService>) -> Result<BridgeState, String> {
     service.start_pairing()
+}
+
+#[tauri::command]
+pub fn bridge_cancel_pairing(service: State<'_, BridgeService>) {
+    service.cancel_pairing();
 }
 
 #[tauri::command]
@@ -526,7 +535,13 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                             "aria2.addUri",
                             vec![json!([item.url]), json!(options_for(item))],
                         ) {
-                            Ok(gid) if gid.is_string() => gids.push(gid),
+                            Ok(gid) if gid.is_string() => {
+                                gids.push(gid);
+                                let _ = inner.app.emit(
+                                    "bridge://started",
+                                    json!({ "name": bridge_item_label(item) }),
+                                );
+                            }
                             _ => {
                                 respond_json(
                                     request,
@@ -771,6 +786,15 @@ fn options_for(item: &BridgeItem) -> Map<String, Value> {
         options.insert("header".into(), json!([format!("Cookie: {value}")]));
     }
     options
+}
+
+fn bridge_item_label(item: &BridgeItem) -> String {
+    item.filename.clone().unwrap_or_else(|| {
+        Url::parse(&item.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "magnet download".into())
+    })
 }
 
 fn hash_token(token: &str) -> String {

@@ -379,6 +379,7 @@ pub fn run() {
             bridge::bridge_get_state,
             bridge::bridge_set_enabled,
             bridge::bridge_start_pairing,
+            bridge::bridge_cancel_pairing,
             bridge::bridge_list_clients,
             bridge::bridge_revoke_client,
             read_torrent_file,

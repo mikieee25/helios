@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { readValue, writeValue } from "@/lib/persistence";
+import { bridgeItemOptions, type BridgeAddItem } from "@/lib/bridge";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const isTorrent = (path: string) => /\.torrent$/i.test(path);
@@ -23,6 +24,7 @@ export default function AddDialog({
   open: isOpen,
   initialLinks,
   initialPath,
+  initialBridgeItems,
   onClose,
   onDropOpen,
   onSelectFiles,
@@ -30,6 +32,7 @@ export default function AddDialog({
   open: boolean;
   initialLinks?: string;
   initialPath?: string;
+  initialBridgeItems?: BridgeAddItem[];
   onClose(): void;
   onDropOpen(links?: string, path?: string): void;
   onSelectFiles(gid: string, metadata: boolean, cleanupGids?: string[]): void;
@@ -37,6 +40,7 @@ export default function AddDialog({
   const settings = useStore((s) => s.settings);
   const dialogRef = useRef<HTMLFormElement>(null);
   const [links, setLinks] = useState("");
+  const [bridgeItems, setBridgeItems] = useState<BridgeAddItem[]>([]);
   const [directory, setDirectory] = useState("");
   const [paused, setPaused] = useState(false);
   const [chooseFiles, setChooseFiles] = useState(false);
@@ -48,13 +52,14 @@ export default function AddDialog({
   useEffect(() => {
     if (!isOpen) return;
     setLinks(initialLinks ?? "");
+    setBridgeItems(initialBridgeItems ?? []);
     setDirectory(settings.downloadDir);
     setPaused(false);
     void readValue("chooseFilesBeforeStarting", false).then(setChooseFiles);
     setTorrent("");
     setTorrentName("");
     setErrors([]);
-  }, [isOpen, initialLinks, settings.downloadDir]);
+  }, [isOpen, initialLinks, initialBridgeItems, settings.downloadDir]);
 
   const loadNativeTorrent = useCallback(async (path: string) => {
     if (!isTorrent(path)) return false;
@@ -231,22 +236,46 @@ export default function AddDialog({
       const errorsByLine = allLines
         .filter(({ uri }) => !validUri(uri))
         .map(({ line, uri }) => `Line ${line}: unsupported link: ${uri}`);
+      const bridgeQueues = new Map<string, BridgeAddItem[]>();
+      for (const item of bridgeItems) {
+        const queue = bridgeQueues.get(item.url) ?? [];
+        queue.push(item);
+        bridgeQueues.set(item.url, queue);
+      }
+      const takeBridgeItem = (uri: string) => bridgeQueues.get(uri)?.shift();
       if (chooseFiles) {
         const magnets = valid.filter(({ uri }) => /^magnet:\?/i.test(uri));
         const ordinary = valid.filter(({ uri }) => !/^magnet:\?/i.test(uri));
-        const results = await useStore.getState().addUris(
-          ordinary.map(({ uri }) => uri),
-          options
-        );
-        results.forEach((error, index) => {
-          if (error)
-            errorsByLine.push(`Line ${ordinary[index].line}: ${error}`);
-        });
+        if (!bridgeItems.length) {
+          const results = await useStore.getState().addUris(
+            ordinary.map(({ uri }) => uri),
+            options
+          );
+          results.forEach((error, index) => {
+            if (error) errorsByLine.push(`Line ${ordinary[index].line}: ${error}`);
+          });
+        } else {
+          for (const { uri, line } of ordinary) {
+            const bridgeItem = takeBridgeItem(uri);
+            try {
+              await useStore.getState().addUri(uri, {
+                ...options,
+                ...(bridgeItem ? bridgeItemOptions(bridgeItem) : {}),
+              });
+            } catch (error) {
+              errorsByLine.push(
+                `Line ${line}: ${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          }
+        }
         for (const { uri, line } of magnets) {
+          const bridgeItem = takeBridgeItem(uri);
           try {
             const gid = await useStore.getState().addUri(uri, {
               ...(directory.trim() ? { dir: directory.trim() } : {}),
               "pause-metadata": "true",
+              ...(bridgeItem ? bridgeItemOptions(bridgeItem) : {}),
             });
             onSelectFiles(gid, true, [gid]);
           } catch (error) {
@@ -256,13 +285,29 @@ export default function AddDialog({
           }
         }
       } else {
-        const results = await useStore.getState().addUris(
-          valid.map(({ uri }) => uri),
-          options
-        );
-        results.forEach((error, index) => {
-          if (error) errorsByLine.push(`Line ${valid[index].line}: ${error}`);
-        });
+        if (!bridgeItems.length) {
+          const results = await useStore.getState().addUris(
+            valid.map(({ uri }) => uri),
+            options
+          );
+          results.forEach((error, index) => {
+            if (error) errorsByLine.push(`Line ${valid[index].line}: ${error}`);
+          });
+        } else {
+          for (const { uri, line } of valid) {
+            const bridgeItem = takeBridgeItem(uri);
+            try {
+              await useStore.getState().addUri(uri, {
+                ...options,
+                ...(bridgeItem ? bridgeItemOptions(bridgeItem) : {}),
+              });
+            } catch (error) {
+              errorsByLine.push(
+                `Line ${line}: ${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          }
+        }
       }
       if (errorsByLine.length) setErrors(errorsByLine);
       else onClose();

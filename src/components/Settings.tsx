@@ -90,11 +90,13 @@ function BrowserBridgeSettings({
   update,
 }: {
   enabled: boolean;
-  update(enabled: boolean): void;
+  update(enabled: boolean): Promise<void>;
 }) {
   const [bridge, setBridge] = useState<BridgeState>();
   const [clients, setClients] = useState<BridgeClient[]>([]);
   const [error, setError] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const previousClientIds = useRef<Set<string> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -114,13 +116,63 @@ function BrowserBridgeSettings({
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!bridge?.pairingCode) return;
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      void invoke<BridgeClient[]>("bridge_list_clients")
+        .then(async (nextClients) => {
+          setClients(nextClients);
+          if (
+            previousClientIds.current &&
+            nextClients.some((client) => !previousClientIds.current?.has(client.id))
+          ) {
+            previousClientIds.current = null;
+            await invoke("bridge_cancel_pairing");
+            setBridge((current) =>
+              current ? { ...current, pairingCode: null, pairingExpiresAt: null, paired: true } : current
+            );
+            return;
+          }
+          if (bridge.pairingExpiresAt && Date.now() / 1000 >= bridge.pairingExpiresAt) {
+            previousClientIds.current = null;
+            await invoke("bridge_cancel_pairing");
+            setBridge((current) =>
+              current ? { ...current, pairingCode: null, pairingExpiresAt: null } : current
+            );
+          }
+        })
+        .catch(() => setError("Could not check for a paired browser."));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [bridge?.pairingCode, bridge?.pairingExpiresAt]);
+
   async function startPairing() {
     try {
+      previousClientIds.current = new Set(clients.map((client) => client.id));
       setBridge(await invoke<BridgeState>("bridge_start_pairing"));
       setError("");
     } catch {
       setError("Could not start pairing. Check that the bridge is enabled.");
     }
+  }
+
+  async function cancelPairing() {
+    try {
+      await invoke("bridge_cancel_pairing");
+      previousClientIds.current = null;
+      setBridge((current) =>
+        current ? { ...current, pairingCode: null, pairingExpiresAt: null } : current
+      );
+      setError("");
+    } catch {
+      setError("Could not cancel browser pairing.");
+    }
+  }
+
+  async function setBridgeEnabled(value: boolean) {
+    await update(value);
+    await refresh();
   }
 
   async function revoke(id: string) {
@@ -135,7 +187,7 @@ function BrowserBridgeSettings({
   return (
     <section className="settings-section" aria-labelledby="bridge-settings-title">
       <div className="settings-section-heading">
-        <h2 id="bridge-settings-title">Browser bridge</h2>
+        <h2 id="bridge-settings-title">Browser integration</h2>
         <button type="button" onClick={() => void refresh()}>
           Refresh
         </button>
@@ -145,52 +197,68 @@ function BrowserBridgeSettings({
         <input
           type="checkbox"
           checked={enabled}
-          onChange={(event) => update(event.target.checked)}
+          onChange={(event) => void setBridgeEnabled(event.target.checked)}
         />
       </label>
       <p className="settings-section-note">
-        Listens on this computer only. Pairing codes expire after two minutes.
+        {enabled && bridge
+          ? "On · Listening for paired browser extensions."
+          : enabled
+            ? "Starting browser integration…"
+            : "Off · Browser extensions cannot connect."}
       </p>
+      {bridge && (
+        <p className="settings-section-note">Local port: 127.0.0.1:{bridge.port}</p>
+      )}
       {enabled && bridge && (
         <>
-          <p className="settings-section-note">
-            Local address: 127.0.0.1:{bridge.port}
-          </p>
-          <div className="settings-section-fields">
-            <div className="setting-field">
-              <span>{bridge.pairingCode ? "Pairing code" : "Pair a browser"}</span>
-              {bridge.pairingCode ? (
-                <code className="bridge-pairing-code">
-                  {bridge.pairingCode}
-                </code>
-              ) : (
-                <button type="button" onClick={() => void startPairing()}>
-                  Generate pairing code
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="settings-section-fields bridge-client-list">
-            {clients.map((client) => (
-              <div className="setting-field" key={client.id}>
-                <span>
-                  {client.label}
-                  <small>
-                    {client.lastUsed
-                      ? `Last used ${new Date(client.lastUsed * 1000).toLocaleString()}`
-                      : "Not used yet"}
-                  </small>
-                </span>
-                <button type="button" onClick={() => void revoke(client.id)}>
-                  Revoke
-                </button>
-              </div>
-            ))}
-            {!clients.length && (
-              <p className="settings-section-note">No browsers paired.</p>
+          <div className="browser-pairing-actions">
+            {!bridge.pairingCode && (
+              <button type="button" onClick={() => void startPairing()}>
+                Pair a browser
+              </button>
+            )}
+            {bridge.paired && !bridge.pairingCode && (
+              <span className="browser-bridge-status">Browser paired</span>
             )}
           </div>
+          {bridge.pairingCode && (
+            <div className="browser-pairing-card">
+              <div>
+                <span className="settings-section-note">Enter this code in your browser extension</span>
+                <code className="bridge-pairing-code">{bridge.pairingCode}</code>
+                <span className="browser-pairing-countdown" aria-live="polite">
+                  Expires in {formatCountdown(bridge.pairingExpiresAt, now)}
+                </span>
+              </div>
+              <button type="button" className="secondary-button" onClick={() => void cancelPairing()}>
+                Cancel
+              </button>
+            </div>
+          )}
         </>
+      )}
+      {bridge && (
+        <div className="settings-section-fields bridge-client-list">
+          {clients.map((client) => (
+            <div className="setting-field" key={client.id}>
+              <span>
+                {client.label}
+                <small>
+                  Created {new Date(client.createdAt * 1000).toLocaleString()} · {client.lastUsed
+                    ? `Last used ${new Date(client.lastUsed * 1000).toLocaleString()}`
+                    : "Not used yet"}
+                </small>
+              </span>
+              <button type="button" onClick={() => void revoke(client.id)}>
+                Revoke
+              </button>
+            </div>
+          ))}
+          {!clients.length && (
+            <p className="settings-section-note">No browsers paired.</p>
+          )}
+        </div>
       )}
       {error && (
         <p className="settings-error" role="alert">
@@ -199,6 +267,11 @@ function BrowserBridgeSettings({
       )}
     </section>
   );
+}
+
+function formatCountdown(expiresAt: number | null, now: number): string {
+  const seconds = Math.max(0, Math.ceil((expiresAt ?? 0) - now / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 export default function Settings() {
@@ -336,7 +409,7 @@ export default function Settings() {
       {inTauri && (
         <BrowserBridgeSettings
           enabled={settings.bridgeEnabled}
-          update={(bridgeEnabled) => void update({ bridgeEnabled })}
+          update={(bridgeEnabled) => update({ bridgeEnabled })}
         />
       )}
       <section
