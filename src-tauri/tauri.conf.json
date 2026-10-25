@@ -32,7 +32,12 @@
     "externalBin": ["binaries/aria2c"],
     "targets": ["nsis"],
     "resources": ["licenses/"],
-    "windows": { "webviewInstallMode": { "type": "embedBootstrapper" } },
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
