@@ -1,6 +1,7 @@
 "use client";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, useStore, validateProxy } from "@/lib/store";
 
 function NumberSetting({
@@ -66,6 +67,137 @@ function SectionHeading({
         Reset section
       </button>
     </div>
+  );
+}
+
+type BridgeState = {
+  enabled: boolean;
+  port: number;
+  paired: boolean;
+  pairingCode: string | null;
+  pairingExpiresAt: number | null;
+};
+
+type BridgeClient = {
+  id: string;
+  label: string;
+  createdAt: number;
+  lastUsed: number | null;
+};
+
+function BrowserBridgeSettings({
+  enabled,
+  update,
+}: {
+  enabled: boolean;
+  update(enabled: boolean): void;
+}) {
+  const [bridge, setBridge] = useState<BridgeState>();
+  const [clients, setClients] = useState<BridgeClient[]>([]);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      const [state, pairedClients] = await Promise.all([
+        invoke<BridgeState>("bridge_get_state"),
+        invoke<BridgeClient[]>("bridge_list_clients"),
+      ]);
+      setBridge(state);
+      setClients(pairedClients);
+      setError("");
+    } catch {
+      setError("Could not load browser bridge status.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function startPairing() {
+    try {
+      setBridge(await invoke<BridgeState>("bridge_start_pairing"));
+      setError("");
+    } catch {
+      setError("Could not start pairing. Check that the bridge is enabled.");
+    }
+  }
+
+  async function revoke(id: string) {
+    try {
+      await invoke("bridge_revoke_client", { id });
+      await refresh();
+    } catch {
+      setError("Could not revoke this browser.");
+    }
+  }
+
+  return (
+    <section className="settings-section" aria-labelledby="bridge-settings-title">
+      <div className="settings-section-heading">
+        <h2 id="bridge-settings-title">Browser bridge</h2>
+        <button type="button" onClick={() => void refresh()}>
+          Refresh
+        </button>
+      </div>
+      <label className="setting-field setting-check">
+        <span>Allow paired browser extensions to add downloads</span>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => update(event.target.checked)}
+        />
+      </label>
+      <p className="settings-section-note">
+        Listens on this computer only. Pairing codes expire after two minutes.
+      </p>
+      {enabled && bridge && (
+        <>
+          <p className="settings-section-note">
+            Local address: 127.0.0.1:{bridge.port}
+          </p>
+          <div className="settings-section-fields">
+            <div className="setting-field">
+              <span>{bridge.pairingCode ? "Pairing code" : "Pair a browser"}</span>
+              {bridge.pairingCode ? (
+                <code className="bridge-pairing-code">
+                  {bridge.pairingCode}
+                </code>
+              ) : (
+                <button type="button" onClick={() => void startPairing()}>
+                  Generate pairing code
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="settings-section-fields bridge-client-list">
+            {clients.map((client) => (
+              <div className="setting-field" key={client.id}>
+                <span>
+                  {client.label}
+                  <small>
+                    {client.lastUsed
+                      ? `Last used ${new Date(client.lastUsed * 1000).toLocaleString()}`
+                      : "Not used yet"}
+                  </small>
+                </span>
+                <button type="button" onClick={() => void revoke(client.id)}>
+                  Revoke
+                </button>
+              </div>
+            ))}
+            {!clients.length && (
+              <p className="settings-section-note">No browsers paired.</p>
+            )}
+          </div>
+        </>
+      )}
+      {error && (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -201,6 +333,12 @@ export default function Settings() {
           </>
         )}
       </div>
+      {inTauri && (
+        <BrowserBridgeSettings
+          enabled={settings.bridgeEnabled}
+          update={(bridgeEnabled) => void update({ bridgeEnabled })}
+        />
+      )}
       <section
         className="settings-section"
         aria-labelledby="network-settings-title"
@@ -307,46 +445,48 @@ export default function Settings() {
             })
           }
         />
-        <NumberSetting
-          label="Stop at share ratio"
-          value={settings.seedRatio}
-          min={0}
-          max={1000}
-          step={0.1}
-          unit="0 disables ratio limit"
-          update={(value) => void update({ seedRatio: value })}
-        />
-        <label className="setting-field">
-          <span>Maximum seeding time</span>
-          <span className="setting-input">
+        <div className="settings-fields seeding-fields">
+          <NumberSetting
+            label="Stop at share ratio"
+            value={settings.seedRatio}
+            min={0}
+            max={1000}
+            step={0.1}
+            unit="0 disables ratio limit"
+            update={(value) => void update({ seedRatio: value })}
+          />
+          <label className="setting-field">
+            <span>Maximum seeding time</span>
+            <span className="setting-input">
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={settings.seedTimeHours}
+                disabled={settings.neverSeed}
+                onChange={(event) =>
+                  void update({
+                    seedTimeHours:
+                      event.target.value === ""
+                        ? ""
+                        : Math.max(0, Number(event.target.value)),
+                  })
+                }
+              />
+              <small>hours · empty is unlimited</small>
+            </span>
+          </label>
+          <label className="setting-field setting-check">
+            <span>Never seed</span>
             <input
-              type="number"
-              min="0"
-              step="0.1"
-              value={settings.seedTimeHours}
-              disabled={settings.neverSeed}
+              type="checkbox"
+              checked={settings.neverSeed}
               onChange={(event) =>
-                void update({
-                  seedTimeHours:
-                    event.target.value === ""
-                      ? ""
-                      : Math.max(0, Number(event.target.value)),
-                })
+                void update({ neverSeed: event.target.checked })
               }
             />
-            <small>hours · empty is unlimited</small>
-          </span>
-        </label>
-        <label className="setting-field setting-check">
-          <span>Never seed</span>
-          <input
-            type="checkbox"
-            checked={settings.neverSeed}
-            onChange={(event) =>
-              void update({ neverSeed: event.target.checked })
-            }
-          />
-        </label>
+          </label>
+        </div>
         {settings.neverSeed ? (
           <p className="settings-section-note">
             Torrents stop seeding immediately after completion.

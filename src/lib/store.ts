@@ -43,6 +43,7 @@ export type Settings = {
   downloadDir: string;
   closeToTray: boolean;
   startWithWindows: boolean;
+  bridgeEnabled: boolean;
   proxyMode: "none" | "manual";
   proxyUrl: string;
   proxyUser: string;
@@ -62,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   downloadDir: "",
   closeToTray: true,
   startWithWindows: false,
+  bridgeEnabled: true,
   proxyMode: "none",
   proxyUrl: "",
   proxyUser: "",
@@ -465,14 +467,18 @@ export const useStore = create<S>((set, get) => {
       historyStore.load(),
       readValue<Settings>("settings", DEFAULT_SETTINGS),
     ]);
+    const loadedSettings = { ...DEFAULT_SETTINGS, ...settings };
     set({
       history,
-      settings: { ...DEFAULT_SETTINGS, ...settings },
+      settings: loadedSettings,
       ready: true,
     });
     let url = ARIA2_URL;
     rpcSecret = BROWSER_SECRET;
     if (inTauri()) {
+      await invoke("bridge_set_enabled", {
+        enabled: loadedSettings.bridgeEnabled,
+      });
       const rpc = await invoke<{ port: number; secret: string }>(
         "get_rpc_config"
       );
@@ -567,6 +573,16 @@ export const useStore = create<S>((set, get) => {
     },
     async updateSettings(update) {
       const settings = { ...get().settings, ...update };
+      if ("bridgeEnabled" in update && inTauri()) {
+        try {
+          await invoke("bridge_set_enabled", {
+            enabled: settings.bridgeEnabled,
+          });
+        } catch {
+          set({ settingsError: "The browser bridge could not be updated." });
+          return;
+        }
+      }
       set({ settings });
       await writeValue("settings", settings);
       if (get().online) await applySettings(settings);

@@ -164,6 +164,8 @@ svg.i {
   margin-top: 12px;
 }
 .side {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
 }
@@ -606,6 +608,9 @@ svg.i {
   gap: 4px;
   margin-top: 18px;
 }
+.seeding-fields {
+  margin-top: 0;
+}
 .setting-field {
   min-height: 60px;
   display: flex;
@@ -686,6 +691,19 @@ svg.i {
 .settings-section-fields {
   display: grid;
   gap: 4px;
+}
+.bridge-pairing-code {
+  color: var(--cy);
+  font-size: 20px;
+  letter-spacing: 0.14em;
+}
+.bridge-client-list {
+  margin-top: 10px;
+}
+.bridge-client-list small {
+  display: block;
+  margin-top: 4px;
+  color: var(--dim);
 }
 .settings-section-note {
   margin: 10px 4px 0;
@@ -1097,6 +1115,9 @@ svg.i {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     gap: 18px;
+  }
+  .side {
+    position: static;
   }
   .side > .lbl,
   .set > .lbl {

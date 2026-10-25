@@ -1,3 +1,5 @@
+mod bridge;
+
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use std::{
@@ -374,6 +376,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_rpc_config,
+            bridge::bridge_get_state,
+            bridge::bridge_set_enabled,
+            bridge::bridge_start_pairing,
+            bridge::bridge_list_clients,
+            bridge::bridge_revoke_client,
             read_torrent_file,
             delete_files,
             open_download_file,
@@ -555,7 +562,15 @@ pub fn run() {
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, message).into());
             };
             app.manage(Aria { child: Mutex::new(Some(child)), shutting_down: setup_shutting_down.clone() });
-            app.manage(RpcConfig { port, secret });
+            app.manage(RpcConfig { port, secret: secret.clone() });
+            let bridge = bridge::BridgeService::start(
+                app_handle.clone(),
+                data.join("bridge.json"),
+                port,
+                secret,
+            )
+            .map_err(std::io::Error::other)?;
+            app.manage(bridge);
             let _ = armed_tx.send(());
             build_tray(app, pending.clone())?;
             Ok(())
@@ -571,6 +586,9 @@ pub fn run() {
     app.run(move |app, event| {
         if let RunEvent::Exit = event {
             shutting_down.store(true, Ordering::SeqCst);
+            if let Some(bridge) = app.try_state::<bridge::BridgeService>() {
+                bridge.stop();
+            }
             let aria = app.state::<Aria>();
             aria.shutting_down.store(true, Ordering::SeqCst);
             let child = aria.child.lock().unwrap().take();
