@@ -10,6 +10,7 @@ import type { HistoryEntry } from "@/lib/history";
 import { buildOverview, type OverviewRow } from "@/lib/overview";
 import { sz, eta } from "@/lib/format";
 import { Ic } from "./Icon";
+import { layoutVirtualRow } from "./virtual-row-layout";
 
 type RowProps = {
   t: Task;
@@ -181,8 +182,8 @@ export default function TaskTable() {
       if (!element) continue;
       const previous = positions.current.get(key);
       const moved = !reset && orderChanged && previous !== undefined && previous !== item.start;
+      layoutVirtualRow(element, item.start, moved && !isReduced ? previous : undefined);
       if (moved && !isReduced) {
-        gsap.fromTo(element, { y: previous }, { y: item.start, duration: 0.5, ease: "power3.out", overwrite: "auto" });
         const rowElement = element.firstElementChild as HTMLElement | null;
         if (rowElement) {
           gsap.fromTo(rowElement, { backgroundColor: "var(--sel)" }, {
@@ -193,21 +194,25 @@ export default function TaskTable() {
             clearProps: "backgroundColor",
           });
         }
-      } else {
-        gsap.set(element, { y: item.start });
       }
+      const inner = element.firstElementChild as HTMLElement | null;
       if (!reset && !previousKeys.current.has(key) && !isReduced) {
-        gsap.fromTo(element, { opacity: 0, x: -12 }, {
+        if (inner) gsap.fromTo(inner, { opacity: 0, x: -12 }, {
           opacity: 1,
           x: 0,
           duration: 0.35,
           overwrite: "auto",
-          onComplete: () => gsap.set(element, { clearProps: "opacity,x" }),
+          onComplete: () => gsap.set(inner, { clearProps: "opacity,transform" }),
         });
-      } else {
-        gsap.set(element, { clearProps: "opacity,x" });
-      }
+      } else if (inner) gsap.set(inner, { clearProps: "opacity,transform" });
       positions.current.set(key, item.start);
+    }
+    const scroller = parentRef.current;
+    if (scroller) {
+      scroller.scrollTop = Math.min(
+        scroller.scrollTop,
+        Math.max(0, virtualizer.getTotalSize() - scroller.clientHeight)
+      );
     }
     for (const key of positions.current.keys()) if (!currentKeys.has(key)) positions.current.delete(key);
     previousKeys.current = currentKeys;

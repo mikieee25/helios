@@ -145,10 +145,10 @@ const same = (a: Task, b: Task) =>
 const inTauri = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-function toTask(r: any): Task {
+function toTask(r: any): Task | undefined {
   const size = +r.totalLength;
   const st: string = r.status;
-  const state: UiState =
+  const state: UiState | undefined =
     st === "complete"
       ? "done"
       : st === "error"
@@ -157,7 +157,10 @@ function toTask(r: any): Task {
           ? r.seeder === "true"
             ? "seed"
             : "dl"
-          : "pa";
+          : st === "paused" || st === "waiting"
+            ? "pa"
+            : undefined;
+  if (!state) return undefined;
   const files: string[] = (r.files ?? []).map(
     (f: { path?: string }) => f.path ?? ""
   );
@@ -247,7 +250,9 @@ export const useStore = create<S>((set, get) => {
       calls.push(c("getGlobalStat"));
       const r = await client.call("system.multicall", calls);
       if (shouldFetchStopped) {
-        stoppedCache = r[stoppedIndex][0];
+        stoppedCache = r[stoppedIndex][0].filter(
+          (task: any) => task.status !== "removed"
+        );
         loadedStoppedRevision = requestedStoppedRevision;
       }
       const activeWaiting = [...r[0][0], ...r[1][0]];
@@ -259,7 +264,7 @@ export const useStore = create<S>((set, get) => {
         ...stoppedCache.filter((task) => !activeGids.has(task.gid)),
       ]) {
         const task = toTask(rawTask);
-        if (taskByGid.has(task.gid)) continue;
+        if (!task || taskByGid.has(task.gid)) continue;
         const previous = old.get(task.gid);
         taskByGid.set(task.gid, previous && same(previous, task) ? previous : task);
       }
@@ -292,7 +297,7 @@ export const useStore = create<S>((set, get) => {
         : api.call<Record<string, any>>("tellStatus", gid, KEYS).then(toTask);
       void status
         .then((result) => {
-          if (result.state === "done")
+          if (result?.state === "done")
             return saveCompletion(result).then(() => {
               pendingCompletions.delete(gid);
             });
@@ -557,11 +562,35 @@ export const useStore = create<S>((set, get) => {
         .then((uris) => uris.map((entry) => entry.uri));
     },
     async removeTask(task, alsoDeleteFiles = false) {
-      if (!api) throw new Error("aria2 is not connected");
-      if (task.state === "dl" || task.state === "seed" || task.state === "pa" || task.queued)
-        await api.call("forceRemove", task.gid);
-      else await api.call("removeDownloadResult", task.gid);
-      void refresh(true);
+      await get().removeHistory(task.gid);
+      const alreadyGone = (error: unknown) => {
+        const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+        return message.includes("could not remove download result") || message.includes("not found");
+      };
+      try {
+        if (!api) {
+          if (task.state !== "done") throw new Error("aria2 is not connected");
+        } else if (task.state === "dl" || task.state === "seed" || task.state === "pa" || task.queued) {
+          try {
+            await api.call("forceRemove", task.gid);
+          } catch (error) {
+            if (!alreadyGone(error)) throw error;
+          }
+          try {
+            await api.call("removeDownloadResult", task.gid);
+          } catch {
+            // forceRemove may already have removed the result.
+          }
+        } else {
+          try {
+            await api.call("removeDownloadResult", task.gid);
+          } catch (error) {
+            if (!alreadyGone(error)) throw error;
+          }
+        }
+      } finally {
+        void refresh(true);
+      }
       if (alsoDeleteFiles && !task.files.some((file) => file.path))
         throw new Error("aria2 has not provided file paths for this download.");
       if (alsoDeleteFiles && task.files.length) {
@@ -584,3 +613,7 @@ export const useStore = create<S>((set, get) => {
     },
   };
 });
+
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as Window & { __helios?: typeof useStore }).__helios = useStore;
+}
