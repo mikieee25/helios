@@ -26,6 +26,25 @@ Paste a link (http, ftp or magnet) anywhere in the window to add a download.
 3. Make the app icons from any 1024px PNG: `npx tauri icon path/to/logo.png`
 4. `npm install` then `npm run tauri dev` (or `npm run tauri build`).
 
+## Download and verify
+
+Download the Windows installer and its `.sha256` file from the draft or published GitHub Release. Verify the checksum in PowerShell:
+
+```powershell
+$installer = ".\Helios_0.1.0_x64-setup.exe"
+$expected = ((Get-Content "$($installer).sha256") -split '\s+')[0].ToLowerInvariant()
+$actual = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 mismatch for $installer" }
+```
+
+Verify the build provenance with GitHub CLI:
+
+```powershell
+gh attestation verify .\Helios_0.1.0_x64-setup.exe --repo mikieee25/helios
+```
+
+Releases are not code-signed yet, so Windows SmartScreen may warn. Select **More info** > **Run anyway** only after verifying the checksum and provenance.
+
 ## Layout
 
 | Path                           | Job                                                                                         |

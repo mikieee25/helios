@@ -11,7 +11,9 @@ const items = [
   { key: "three", start: 104 },
 ];
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 let root: ReturnType<typeof createRoot> | undefined;
 
 afterEach(() => {
@@ -33,10 +35,21 @@ it("keeps each virtual row's y position across rerenders", () => {
       }
     }, [revision]);
 
-    return <>{items.map((item) => <div key={item.key} ref={(element) => {
-      if (element) wrappers.set(item.key, element);
-      else wrappers.delete(item.key);
-    }}><div>Row {item.key}</div></div>)}</>;
+    return (
+      <>
+        {items.map((item) => (
+          <div
+            key={item.key}
+            ref={(element) => {
+              if (element) wrappers.set(item.key, element);
+              else wrappers.delete(item.key);
+            }}
+          >
+            <div>Row {item.key}</div>
+          </div>
+        ))}
+      </>
+    );
   }
 
   root = createRoot(host);

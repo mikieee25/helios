@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to release
+        required: true
+        type: string
+
+env:
+  # Update both values together when moving to another verified aria2 Windows release.
+  ARIA2_VERSION: "1.37.0"
+  ARIA2_SHA256: "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
+
+jobs:
+  build:
+    name: Build Windows x64 installer
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Check release versions
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoText = Get-Content src-tauri/Cargo.toml -Raw
+          if ($cargoText -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'Cargo.toml version is missing.' }
+          $cargoVersion = $Matches[1]
+          if (($packageVersion -ne $tauriVersion) -or ($packageVersion -ne $cargoVersion)) {
+            throw "Version mismatch: package.json=$packageVersion, tauri.conf.json=$tauriVersion, Cargo.toml=$cargoVersion"
+          }
+          $tag = $env:RELEASE_TAG
+          if (-not $tag.StartsWith('v')) { throw "Release tag must start with v: $tag" }
+          $tagVersion = $tag.Substring(1)
+          if ($tagVersion -ne $packageVersion) {
+            throw "Tag version $tagVersion does not match project version $packageVersion."
+          }
+
+      - name: Type-check
+        run: npx.cmd tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Download and verify aria2 sidecar and notices
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "aria2-$env:ARIA2_VERSION-win-64bit-build1.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "aria2-$env:ARIA2_VERSION"
+          $uri = "https://github.com/aria2/aria2/releases/download/release-$env:ARIA2_VERSION/aria2-$env:ARIA2_VERSION-win-64bit-build1.zip"
+          Invoke-WebRequest -Uri $uri -OutFile $archive
+          $actualHash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:ARIA2_SHA256) { throw "aria2 archive SHA-256 mismatch: $actualHash" }
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $aria2Exe = Get-ChildItem -Path $extract -Filter aria2c.exe -Recurse | Select-Object -First 1
+          $copying = Get-ChildItem -Path $extract -Filter COPYING -Recurse | Select-Object -First 1
+          $openssl = Get-ChildItem -Path $extract -Filter LICENSE.OpenSSL -Recurse | Select-Object -First 1
+          if (-not $aria2Exe -or -not $copying -or -not $openssl) { throw 'aria2 executable or required license files are missing from the verified archive.' }
+          New-Item -ItemType Directory -Force src-tauri/binaries, src-tauri/licenses/aria2 | Out-Null
+          Copy-Item $aria2Exe.FullName src-tauri/binaries/aria2c-x86_64-pc-windows-msvc.exe -Force
+          Copy-Item $copying.FullName src-tauri/licenses/aria2/COPYING -Force
+          Copy-Item $openssl.FullName src-tauri/licenses/aria2/LICENSE.OpenSSL -Force
+
+      - name: Check Rust backend
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Tauri installer
+        run: npm.cmd run tauri build
+
+      - name: Upload installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helios-installer
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Attest and draft release
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Download built installer
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: helios-installer
+          path: release-artifacts
+
+      - name: Set installer path
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem release-artifacts -Filter *.exe -File)
+          if ($installers.Count -ne 1) { throw "Expected exactly one NSIS installer; found $($installers.Count)." }
+          "INSTALLER_PATH=$($installers[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $installer = Get-Item -LiteralPath $env:INSTALLER_PATH
+          $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumPath = "$($installer.FullName).sha256"
+          "$hash  $($installer.Name)" | Set-Content -LiteralPath $checksumPath -NoNewline -Encoding ascii
+          "CHECKSUM_PATH=$checksumPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Attest installer provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: release-artifacts/*.exe
+
+      - name: Upload final installer and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: helios-installer-final
+          path: |
+            release-artifacts/*.exe
+            release-artifacts/*.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Create draft GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:RELEASE_TAG $env:INSTALLER_PATH $env:CHECKSUM_PATH --repo $env:GITHUB_REPOSITORY --draft --generate-notes --verify-tag

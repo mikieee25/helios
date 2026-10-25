@@ -10,6 +10,7 @@ import * as historyStore from "./history";
 import type { HistoryEntry } from "./history";
 import { dominantCategory, fileCategory, type FileCategory } from "./format";
 import { readValue, writeValue } from "./persistence";
+import { selectionTotals, type TorrentFile } from "./torrent-files";
 
 export type UiState = "dl" | "seed" | "pa" | "done" | "err";
 export type Filter = "all" | "dl" | "seed" | "done";
@@ -28,7 +29,8 @@ export type Task = {
   since: number;
   category: FileCategory;
   dir: string;
-  files: { path: string }[];
+  files: TorrentFile[];
+  torrent: boolean;
   errorMessage: string;
   errorCode: string;
 };
@@ -41,6 +43,15 @@ export type Settings = {
   downloadDir: string;
   closeToTray: boolean;
   startWithWindows: boolean;
+  proxyMode: "none" | "manual";
+  proxyUrl: string;
+  proxyUser: string;
+  proxyPassword: string;
+  noProxy: string;
+  seedRatio: number;
+  seedTimeHours: number | "";
+  neverSeed: boolean;
+  fileConflict: "rename" | "overwrite" | "error";
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -51,6 +62,15 @@ export const DEFAULT_SETTINGS: Settings = {
   downloadDir: "",
   closeToTray: true,
   startWithWindows: false,
+  proxyMode: "none",
+  proxyUrl: "",
+  proxyUser: "",
+  proxyPassword: "",
+  noProxy: "",
+  seedRatio: 1,
+  seedTimeHours: "",
+  neverSeed: false,
+  fileConflict: "rename",
 };
 export const N = 48;
 export const ARIA2_URL =
@@ -112,7 +132,16 @@ interface S {
   toggle(t: Task): Promise<void>;
   add(uri: string): void;
   addUris(uris: string[], options?: AddOptions): Promise<string[]>;
-  addTorrent(torrent: string, options?: AddOptions): Promise<void>;
+  addUri(uri: string, options?: AddOptions): Promise<string>;
+  addTorrent(torrent: string, options?: AddOptions): Promise<string>;
+  torrentFiles(gid: string): Promise<TorrentFile[]>;
+  torrentFollowedBy(gid: string): Promise<string[]>;
+  selectTorrentFiles(
+    gid: string,
+    indexes: string,
+    wasActive: boolean
+  ): Promise<void>;
+  cancelTorrentSelection(gids: string[]): Promise<void>;
   taskUris(gid: string): Promise<string[]>;
   removeTask(task: Task, alsoDeleteFiles?: boolean): Promise<void>;
   retryTask(task: Task): Promise<void>;
@@ -139,14 +168,36 @@ const same = (a: Task, b: Task) =>
   (Object.keys(a) as (keyof Task)[]).every((k) =>
     k === "files"
       ? a.files.length === b.files.length &&
-        a.files.every((file, index) => file.path === b.files[index]?.path)
+        a.files.every((file, index) => {
+          const other = b.files[index];
+          return (
+            file.path === other?.path &&
+            file.index === other.index &&
+            file.length === other.length &&
+            file.completedLength === other.completedLength &&
+            file.selected === other.selected
+          );
+        })
       : a[k] === b[k]
   );
 const inTauri = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 function toTask(r: any): Task | undefined {
-  const size = +r.totalLength;
+  const torrent = Boolean(r.bittorrent);
+  const files: TorrentFile[] = (r.files ?? []).map(
+    (file: any, index: number) => ({
+      index: Number(file.index) || index + 1,
+      path: file.path ?? "",
+      length: +file.length || 0,
+      completedLength: +file.completedLength || 0,
+      selected: file.selected === "true",
+    })
+  );
+  const selectedTotals = selectionTotals(files);
+  const size = torrent && files.length ? selectedTotals.size : +r.totalLength;
+  const completed =
+    torrent && files.length ? selectedTotals.completed : +r.completedLength;
   const st: string = r.status;
   const state: UiState | undefined =
     st === "complete"
@@ -161,17 +212,15 @@ function toTask(r: any): Task | undefined {
             ? "pa"
             : undefined;
   if (!state) return undefined;
-  const files: string[] = (r.files ?? []).map(
-    (f: { path?: string }) => f.path ?? ""
-  );
+  const paths = files.map((file) => file.path);
   const name =
-    r.bittorrent?.info?.name ?? files[0]?.split(/[\\/]/).pop() ?? r.gid;
+    r.bittorrent?.info?.name ?? paths[0]?.split(/[\\/]/).pop() ?? r.gid;
   if (state === "dl" && !seen.has(r.gid)) seen.set(r.gid, Date.now());
   return {
     gid: r.gid,
     name: name || r.gid,
     size,
-    done: size ? +r.completedLength / size : 0,
+    done: size ? completed / size : 0,
     speed: +r.downloadSpeed,
     upSpeed: +r.uploadSpeed,
     upTotal: +r.uploadLength,
@@ -182,16 +231,41 @@ function toTask(r: any): Task | undefined {
     since: seen.get(r.gid) ?? Date.now(),
     category:
       fileCategory(name) === "other"
-        ? dominantCategory(files)
+        ? dominantCategory(paths)
         : fileCategory(name),
     dir: r.dir ?? "",
-    files: (r.files ?? []).map((f: { path?: string }) => ({ path: f.path ?? "" })),
+    files,
+    torrent,
     errorMessage: String(r.errorMessage ?? ""),
     errorCode: String(r.errorCode ?? ""),
   };
 }
 
-function optionsFor(settings: Settings, defaultDir?: string) {
+export function validateProxy(value: string): string | undefined {
+  const input = value.trim();
+  if (!input) return "Enter a proxy host and port, such as proxy.example:3128.";
+  if (/\s/.test(input)) return "Enter a valid proxy host and port.";
+  const candidate = /^https?:\/\//i.test(input) ? input : `http://${input}`;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "http:" && url.protocol !== "https:")
+      return "Use an HTTP or HTTPS proxy.";
+    if (!url.hostname || url.username || url.password || url.search || url.hash)
+      return "Enter a valid proxy host and port.";
+    const authority = candidate.match(/^https?:\/\/([^/?#]+)/i)?.[1] ?? "";
+    const portText = authority.startsWith("[")
+      ? authority.match(/^\[[^\]]+\]:(\d+)$/)?.[1]
+      : authority.match(/^.+:(\d+)$/)?.[1];
+    const port = Number(portText);
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      return "Enter a proxy port from 1 to 65535.";
+    return undefined;
+  } catch {
+    return "Enter a valid proxy host and port.";
+  }
+}
+
+export function optionsFor(settings: Settings, defaultDir?: string) {
   return {
     "max-overall-download-limit": String(
       Math.round(settings.maxDownloadMB * 1048576)
@@ -202,6 +276,20 @@ function optionsFor(settings: Settings, defaultDir?: string) {
     "max-concurrent-downloads": String(settings.maxConcurrent),
     "max-connection-per-server": String(settings.connectionsPerServer),
     split: String(settings.connectionsPerServer),
+    "all-proxy":
+      settings.proxyMode === "manual" ? settings.proxyUrl.trim() : "",
+    "all-proxy-user": settings.proxyMode === "manual" ? settings.proxyUser : "",
+    "all-proxy-passwd":
+      settings.proxyMode === "manual" ? settings.proxyPassword : "",
+    "no-proxy": settings.proxyMode === "manual" ? settings.noProxy.trim() : "",
+    "seed-ratio": settings.neverSeed ? "" : String(settings.seedRatio),
+    "seed-time": settings.neverSeed
+      ? "0"
+      : settings.seedTimeHours === ""
+        ? ""
+        : String(Math.round(settings.seedTimeHours * 60)),
+    "auto-file-renaming": String(settings.fileConflict === "rename"),
+    "allow-overwrite": String(settings.fileConflict === "overwrite"),
     ...(settings.downloadDir || defaultDir
       ? { dir: settings.downloadDir || defaultDir }
       : {}),
@@ -211,6 +299,14 @@ function optionsFor(settings: Settings, defaultDir?: string) {
 export const useStore = create<S>((set, get) => {
   async function applySettings(settings = get().settings) {
     if (!api) return;
+    const proxyError =
+      settings.proxyMode === "manual"
+        ? validateProxy(settings.proxyUrl)
+        : undefined;
+    if (proxyError) {
+      set({ settingsError: proxyError });
+      return;
+    }
     try {
       if (!aria2DefaultDir)
         aria2DefaultDir = (
@@ -221,10 +317,8 @@ export const useStore = create<S>((set, get) => {
         optionsFor(settings, aria2DefaultDir)
       );
       set({ settingsError: undefined });
-    } catch (error) {
-      set({
-        settingsError: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
+      set({ settingsError: "aria2 could not apply these settings." });
     }
   }
 
@@ -240,10 +334,7 @@ export const useStore = create<S>((set, get) => {
         methodName: `aria2.${m}`,
         params: [`token:${rpcSecret}`, ...p],
       });
-      const calls = [
-        c("tellActive", KEYS),
-        c("tellWaiting", 0, 5000, KEYS),
-      ];
+      const calls = [c("tellActive", KEYS), c("tellWaiting", 0, 5000, KEYS)];
       const stoppedIndex = calls.length;
       if (shouldFetchStopped) calls.push(c("tellStopped", 0, 100, KEYS));
       const statIndex = calls.length;
@@ -257,16 +348,44 @@ export const useStore = create<S>((set, get) => {
       }
       const activeWaiting = [...r[0][0], ...r[1][0]];
       const activeGids = new Set(activeWaiting.map((task: any) => task.gid));
+      const selectedFiles = new Map<string, TorrentFile[]>();
+      await Promise.all(
+        activeWaiting
+          .filter((task: any) => task.bittorrent)
+          .map(async (task: any) => {
+            try {
+              const files = await client.call<any[]>("getFiles", task.gid);
+              selectedFiles.set(
+                task.gid,
+                files.map((file, index) => ({
+                  index: Number(file.index) || index + 1,
+                  path: String(file.path ?? ""),
+                  length: +file.length || 0,
+                  completedLength: +file.completedLength || 0,
+                  selected: file.selected === "true",
+                }))
+              );
+            } catch {
+              /* tellStatus still supplies the task snapshot if getFiles is unavailable */
+            }
+          })
+      );
       const old = new Map(get().tasks.map((t) => [t.gid, t]));
       const taskByGid = new Map<string, Task>();
-      for (const rawTask of [
+      for (const original of [
         ...activeWaiting,
         ...stoppedCache.filter((task) => !activeGids.has(task.gid)),
       ]) {
+        const rawTask = selectedFiles.has(original.gid)
+          ? { ...original, files: selectedFiles.get(original.gid) }
+          : original;
         const task = toTask(rawTask);
         if (!task || taskByGid.has(task.gid)) continue;
         const previous = old.get(task.gid);
-        taskByGid.set(task.gid, previous && same(previous, task) ? previous : task);
+        taskByGid.set(
+          task.gid,
+          previous && same(previous, task) ? previous : task
+        );
       }
       const tasks = [...taskByGid.values()];
       const g = r[statIndex][0];
@@ -346,7 +465,11 @@ export const useStore = create<S>((set, get) => {
       historyStore.load(),
       readValue<Settings>("settings", DEFAULT_SETTINGS),
     ]);
-    set({ history, settings: { ...DEFAULT_SETTINGS, ...settings }, ready: true });
+    set({
+      history,
+      settings: { ...DEFAULT_SETTINGS, ...settings },
+      ready: true,
+    });
     let url = ARIA2_URL;
     rpcSecret = BROWSER_SECRET;
     if (inTauri()) {
@@ -455,7 +578,9 @@ export const useStore = create<S>((set, get) => {
         await writeValue("settings", settings);
         set({ settings, settingsError: undefined });
       } catch (error) {
-        set({ settingsError: error instanceof Error ? error.message : String(error) });
+        set({
+          settingsError: error instanceof Error ? error.message : String(error),
+        });
       }
     },
     async clearHistory() {
@@ -470,7 +595,7 @@ export const useStore = create<S>((set, get) => {
       shutdownRequested = true;
       if (refreshTimer) clearInterval(refreshTimer);
       const deadline = Date.now() + 3000;
-      const beforeDeadline = <T,>(promise: Promise<T>) => {
+      const beforeDeadline = <T>(promise: Promise<T>) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         return Promise.race([
           promise,
@@ -550,10 +675,84 @@ export const useStore = create<S>((set, get) => {
       void refresh(true);
       return errors;
     },
+    async addUri(uri, options = {}) {
+      if (!api) throw new Error("aria2 is not connected");
+      const gid = await api.call<string>("addUri", [uri], options);
+      void refresh(true);
+      return gid;
+    },
     async addTorrent(torrent, options = {}) {
       if (!api) throw new Error("aria2 is not connected");
-      await api.call("addTorrent", torrent, [], options);
+      const gid = await api.call<string>("addTorrent", torrent, [], options);
       void refresh(true);
+      return gid;
+    },
+    async torrentFiles(gid) {
+      if (!api) throw new Error("aria2 is not connected");
+      const files = await api.call<any[]>("getFiles", gid);
+      return files.map((file, index) => ({
+        index: Number(file.index) || index + 1,
+        path: String(file.path ?? ""),
+        length: +file.length || 0,
+        completedLength: +file.completedLength || 0,
+        selected: file.selected === "true",
+      }));
+    },
+    async torrentFollowedBy(gid) {
+      if (!api) throw new Error("aria2 is not connected");
+      const status = await api.call<{ followedBy?: string[] }>(
+        "tellStatus",
+        gid,
+        ["followedBy"]
+      );
+      return status.followedBy ?? [];
+    },
+    async selectTorrentFiles(gid, indexes, wasActive) {
+      if (!api) throw new Error("aria2 is not connected");
+      if (wasActive) await api.call("pause", gid);
+      try {
+        await api.call("changeOption", gid, { "select-file": indexes });
+      } finally {
+        await api.call("unpause", gid);
+      }
+      void refresh(true);
+    },
+    async cancelTorrentSelection(gids) {
+      if (!api)
+        throw new Error(
+          "aria2 is not connected; the torrent could not be canceled."
+        );
+      const errors: string[] = [];
+      const alreadyGone = (error: unknown) => {
+        const message = (
+          error instanceof Error ? error.message : String(error)
+        ).toLowerCase();
+        return (
+          message.includes("not found") ||
+          message.includes("is not found") ||
+          message.includes("could not remove download result")
+        );
+      };
+      for (const gid of new Set(gids)) {
+        try {
+          await api.call("forceRemove", gid);
+        } catch (error) {
+          if (!alreadyGone(error))
+            errors.push(
+              `${gid}: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+        try {
+          await api.call("removeDownloadResult", gid);
+        } catch (error) {
+          if (!alreadyGone(error))
+            errors.push(
+              `${gid}: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+      }
+      void refresh(true);
+      if (errors.length) throw new Error(errors.join("\n"));
     },
     async taskUris(gid) {
       if (!api) throw new Error("aria2 is not connected");
@@ -564,13 +763,23 @@ export const useStore = create<S>((set, get) => {
     async removeTask(task, alsoDeleteFiles = false) {
       await get().removeHistory(task.gid);
       const alreadyGone = (error: unknown) => {
-        const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-        return message.includes("could not remove download result") || message.includes("not found");
+        const message = (
+          error instanceof Error ? error.message : String(error)
+        ).toLowerCase();
+        return (
+          message.includes("could not remove download result") ||
+          message.includes("not found")
+        );
       };
       try {
         if (!api) {
           if (task.state !== "done") throw new Error("aria2 is not connected");
-        } else if (task.state === "dl" || task.state === "seed" || task.state === "pa" || task.queued) {
+        } else if (
+          task.state === "dl" ||
+          task.state === "seed" ||
+          task.state === "pa" ||
+          task.queued
+        ) {
           try {
             await api.call("forceRemove", task.gid);
           } catch (error) {
@@ -604,7 +813,8 @@ export const useStore = create<S>((set, get) => {
     async retryTask(task) {
       if (!api) throw new Error("aria2 is not connected");
       const uris = await get().taskUris(task.gid);
-      if (!uris.length) throw new Error("No source URLs are available to retry.");
+      if (!uris.length)
+        throw new Error("No source URLs are available to retry.");
       const errors = await get().addUris(uris);
       const failed = errors.find(Boolean);
       if (failed) throw new Error(failed);

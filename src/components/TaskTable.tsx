@@ -11,6 +11,7 @@ import { buildOverview, type OverviewRow } from "@/lib/overview";
 import { sz, eta } from "@/lib/format";
 import { Ic } from "./Icon";
 import { layoutVirtualRow } from "./virtual-row-layout";
+import SelectFilesDialog from "./SelectFilesDialog";
 
 type RowProps = {
   t: Task;
@@ -20,12 +21,25 @@ type RowProps = {
   onRetry(task: Task): void;
   onReveal(task: Task): void;
   onOpen(task: Task): void;
+  onSelectFiles(task: Task): void;
   onSelect(gid: string, event: ReactMouseEvent): void;
   onContext(event: React.MouseEvent, task: Task): void;
   disabled?: boolean;
 };
 
-const Row = memo(function Row({ t, sel, onRemove, onToggle, onRetry, onReveal, onOpen, onSelect, onContext, disabled = false }: RowProps) {
+const Row = memo(function Row({
+  t,
+  sel,
+  onRemove,
+  onToggle,
+  onRetry,
+  onReveal,
+  onOpen,
+  onSelectFiles,
+  onSelect,
+  onContext,
+  disabled = false,
+}: RowProps) {
   const time =
     t.state === "dl"
       ? eta((t.size * (1 - t.done)) / t.speed)
@@ -33,7 +47,7 @@ const Row = memo(function Row({ t, sel, onRemove, onToggle, onRetry, onReveal, o
         ? "Seeding"
         : t.state === "done"
           ? "Completed"
-        : t.state === "err"
+          : t.state === "err"
             ? "Failed"
             : t.queued
               ? "Queued"
@@ -41,18 +55,96 @@ const Row = memo(function Row({ t, sel, onRemove, onToggle, onRetry, onReveal, o
   return (
     <div
       className={`row ${t.state}${sel ? " sel" : ""}`}
-      title={t.state === "err" ? [t.errorMessage, t.errorCode && `Error ${t.errorCode}`].filter(Boolean).join("\n") || "Download failed" : undefined}
+      title={
+        t.state === "err"
+          ? [t.errorMessage, t.errorCode && `Error ${t.errorCode}`]
+              .filter(Boolean)
+              .join("\n") || "Download failed"
+          : undefined
+      }
       onClick={(event) => onSelect(t.gid, event)}
       onDoubleClick={() => !disabled && t.state === "done" && onOpen(t)}
       onContextMenu={(event) => onContext(event, t)}
     >
       <div className="nm">
-        <span title={t.state === "err" ? [t.errorMessage, t.errorCode && `Error ${t.errorCode}`].filter(Boolean).join("\n") || "Download failed" : t.name}>{t.name}</span>
+        <span
+          title={
+            t.state === "err"
+              ? [t.errorMessage, t.errorCode && `Error ${t.errorCode}`]
+                  .filter(Boolean)
+                  .join("\n") || "Download failed"
+              : t.name
+          }
+        >
+          {t.name}
+        </span>
         <span className="row-actions">
-          {(t.state === "dl" || t.state === "seed" || t.state === "pa") && <button className="st" disabled={disabled} aria-label={t.state === "pa" && !t.queued ? "Resume download" : "Pause download"} onClick={(event) => { event.stopPropagation(); onToggle(t); }}><Ic n={t.state === "pa" && !t.queued ? "down" : "pause"} /></button>}
-          {t.state === "err" && <button className="st" disabled={disabled} aria-label="Retry download" onClick={(event) => { event.stopPropagation(); onRetry(t); }}><Ic n="retry" /></button>}
-          <button className="st" disabled={disabled} aria-label={`Remove ${t.name}`} onClick={(event) => { event.stopPropagation(); onRemove(t); }}><Ic n="trash" /></button>
-          <button className="st" aria-label={`Show ${t.name} in folder`} disabled={disabled || !t.files[0]?.path} onClick={(event) => { event.stopPropagation(); onReveal(t); }}><Ic n="reveal" /></button>
+          {(t.state === "dl" || t.state === "seed" || t.state === "pa") && (
+            <button
+              className="st"
+              disabled={disabled}
+              aria-label={
+                t.state === "pa" && !t.queued
+                  ? "Resume download"
+                  : "Pause download"
+              }
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggle(t);
+              }}
+            >
+              <Ic n={t.state === "pa" && !t.queued ? "down" : "pause"} />
+            </button>
+          )}
+          {t.state === "err" && (
+            <button
+              className="st"
+              disabled={disabled}
+              aria-label="Retry download"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRetry(t);
+              }}
+            >
+              <Ic n="retry" />
+            </button>
+          )}
+          {t.torrent && (t.state === "pa" || t.state === "dl") && (
+            <button
+              className="st"
+              disabled={disabled}
+              aria-label={`Select files in ${t.name}`}
+              title="Select files"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectFiles(t);
+              }}
+            >
+              <Ic n="doc" />
+            </button>
+          )}
+          <button
+            className="st"
+            disabled={disabled}
+            aria-label={`Remove ${t.name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove(t);
+            }}
+          >
+            <Ic n="trash" />
+          </button>
+          <button
+            className="st"
+            aria-label={`Show ${t.name} in folder`}
+            disabled={disabled || !t.files[0]?.path}
+            onClick={(event) => {
+              event.stopPropagation();
+              onReveal(t);
+            }}
+          >
+            <Ic n="reveal" />
+          </button>
         </span>
       </div>
       <div>
@@ -86,7 +178,11 @@ const CompletedRow = memo(function CompletedRow({
   online: boolean;
 }) {
   return (
-    <div className="row done" onDoubleClick={() => onOpen(entry.filePath || task?.files[0]?.path || "")} onContextMenu={task ? (event) => onContext(event, task) : undefined}>
+    <div
+      className="row done"
+      onDoubleClick={() => onOpen(entry.filePath || task?.files[0]?.path || "")}
+      onContextMenu={task ? (event) => onContext(event, task) : undefined}
+    >
       <div className="nm">
         <button
           className="st"
@@ -96,10 +192,26 @@ const CompletedRow = memo(function CompletedRow({
           <Ic n="x" />
         </button>
         <span title={entry.name}>{entry.name}</span>
-        {task && <span className="row-actions">
-          <button className="st" aria-label={`Remove ${task.name}`} disabled={!online} onClick={() => onRemove(task)}><Ic n="trash" /></button>
-          <button className="st" aria-label={`Show ${task.name} in folder`} disabled={!online || !task.files[0]?.path} onClick={() => onReveal(task)}><Ic n="reveal" /></button>
-        </span>}
+        {task && (
+          <span className="row-actions">
+            <button
+              className="st"
+              aria-label={`Remove ${task.name}`}
+              disabled={!online}
+              onClick={() => onRemove(task)}
+            >
+              <Ic n="trash" />
+            </button>
+            <button
+              className="st"
+              aria-label={`Show ${task.name} in folder`}
+              disabled={!online || !task.files[0]?.path}
+              onClick={() => onReveal(task)}
+            >
+              <Ic n="reveal" />
+            </button>
+          </span>
+        )}
       </div>
       <div>
         <div className="trk">
@@ -115,6 +227,7 @@ const CompletedRow = memo(function CompletedRow({
 });
 
 export default function TaskTable() {
+  const [fileSelection, setFileSelection] = useState<Task>();
   const [menu, setMenu] = useState<{ task: Task; x: number; y: number }>();
   const [actionError, setActionError] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -146,12 +259,26 @@ export default function TaskTable() {
     setSelected(new Set());
     anchor.current = undefined;
   }, [filter, category]);
-  const rows: OverviewRow[] = filter === "all"
-    ? buildOverview(tasks, history, category)
-    : isHistory
-      ? history.filter((entry) => !category || entry.category === category).map((entry) => ({ kind: "history", entry }))
-      : tasks.filter((task) => task.state === filter && (!category || task.category === category)).map((task) => ({ kind: "task", task }));
-  const taskRows = rows.filter((row): row is Extract<OverviewRow, { kind: "task" }> => row.kind === "task").map((row) => row.task);
+  const rows: OverviewRow[] =
+    filter === "all"
+      ? buildOverview(tasks, history, category)
+      : isHistory
+        ? history
+            .filter((entry) => !category || entry.category === category)
+            .map((entry) => ({ kind: "history", entry }))
+        : tasks
+            .filter(
+              (task) =>
+                task.state === filter &&
+                (!category || task.category === category)
+            )
+            .map((task) => ({ kind: "task", task }));
+  const taskRows = rows
+    .filter(
+      (row): row is Extract<OverviewRow, { kind: "task" }> =>
+        row.kind === "task"
+    )
+    .map((row) => row.task);
   const selectedTasks = taskRows.filter((task) => selected.has(task.gid));
   const taskRowsRef = useRef(taskRows);
   const selectedTasksRef = useRef(selectedTasks);
@@ -168,11 +295,19 @@ export default function TaskTable() {
     overscan: 6,
   });
   const layoutSignature = `${filter}\0${category ?? ""}\0${view}`;
-  const rowKeys = rows.map((row) => row.kind === "task" ? row.task.gid : row.entry.id);
+  const rowKeys = rows.map((row) =>
+    row.kind === "task" ? row.task.gid : row.entry.id
+  );
   useLayoutEffect(() => {
-    const reset = !laidOut.current || previousLayout.current !== layoutSignature;
-    const orderChanged = !reset && (rowKeys.length !== previousOrder.current.length || rowKeys.some((key, index) => previousOrder.current[index] !== key));
-    const isReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reset =
+      !laidOut.current || previousLayout.current !== layoutSignature;
+    const orderChanged =
+      !reset &&
+      (rowKeys.length !== previousOrder.current.length ||
+        rowKeys.some((key, index) => previousOrder.current[index] !== key));
+    const isReduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
     const currentKeys = new Set(rowKeys);
     if (reset) positions.current.clear();
     for (const item of virtualizer.getVirtualItems()) {
@@ -181,29 +316,49 @@ export default function TaskTable() {
       const element = rowRefs.current.get(key);
       if (!element) continue;
       const previous = positions.current.get(key);
-      const moved = !reset && orderChanged && previous !== undefined && previous !== item.start;
-      layoutVirtualRow(element, item.start, moved && !isReduced ? previous : undefined);
+      const moved =
+        !reset &&
+        orderChanged &&
+        previous !== undefined &&
+        previous !== item.start;
+      layoutVirtualRow(
+        element,
+        item.start,
+        moved && !isReduced ? previous : undefined
+      );
       if (moved && !isReduced) {
         const rowElement = element.firstElementChild as HTMLElement | null;
         if (rowElement) {
-          gsap.fromTo(rowElement, { backgroundColor: "var(--sel)" }, {
-            backgroundColor: rowElement.classList.contains("sel") ? "var(--sel)" : "var(--row)",
-            duration: 0.6,
-            ease: "power2.out",
-            overwrite: "auto",
-            clearProps: "backgroundColor",
-          });
+          gsap.fromTo(
+            rowElement,
+            { backgroundColor: "var(--sel)" },
+            {
+              backgroundColor: rowElement.classList.contains("sel")
+                ? "var(--sel)"
+                : "var(--row)",
+              duration: 0.6,
+              ease: "power2.out",
+              overwrite: "auto",
+              clearProps: "backgroundColor",
+            }
+          );
         }
       }
       const inner = element.firstElementChild as HTMLElement | null;
       if (!reset && !previousKeys.current.has(key) && !isReduced) {
-        if (inner) gsap.fromTo(inner, { opacity: 0, x: -12 }, {
-          opacity: 1,
-          x: 0,
-          duration: 0.35,
-          overwrite: "auto",
-          onComplete: () => gsap.set(inner, { clearProps: "opacity,transform" }),
-        });
+        if (inner)
+          gsap.fromTo(
+            inner,
+            { opacity: 0, x: -12 },
+            {
+              opacity: 1,
+              x: 0,
+              duration: 0.35,
+              overwrite: "auto",
+              onComplete: () =>
+                gsap.set(inner, { clearProps: "opacity,transform" }),
+            }
+          );
       } else if (inner) gsap.set(inner, { clearProps: "opacity,transform" });
       positions.current.set(key, item.start);
     }
@@ -214,18 +369,23 @@ export default function TaskTable() {
         Math.max(0, virtualizer.getTotalSize() - scroller.clientHeight)
       );
     }
-    for (const key of positions.current.keys()) if (!currentKeys.has(key)) positions.current.delete(key);
+    for (const key of positions.current.keys())
+      if (!currentKeys.has(key)) positions.current.delete(key);
     previousKeys.current = currentKeys;
     previousOrder.current = rowKeys;
     previousLayout.current = layoutSignature;
     laidOut.current = true;
   });
-  useEffect(() => () => {
-    for (const element of rowRefs.current.values()) {
-      gsap.killTweensOf(element);
-      if (element.firstElementChild) gsap.killTweensOf(element.firstElementChild);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      for (const element of rowRefs.current.values()) {
+        gsap.killTweensOf(element);
+        if (element.firstElementChild)
+          gsap.killTweensOf(element.firstElementChild);
+      }
+    },
+    []
+  );
   useEffect(() => {
     setOfflineTimedOut(false);
     if (!ready || online) return;
@@ -247,12 +407,17 @@ export default function TaskTable() {
       window.removeEventListener("scroll", close, true);
     };
   }, []);
-  useEffect(() => { if (!online) setMenu(undefined); }, [online]);
+  useEffect(() => {
+    if (!online) setMenu(undefined);
+  }, [online]);
 
   async function run(action: () => Promise<unknown>) {
     setActionError("");
-    try { await action(); }
-    catch (error) { setActionError(error instanceof Error ? error.message : String(error)); }
+    try {
+      await action();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    }
     setMenu(undefined);
   }
 
@@ -265,26 +430,46 @@ export default function TaskTable() {
     setConfirmTasks(selectedTasks);
     setDeleteFiles(false);
   };
-  const retry = (task: Task) => void run(() => useStore.getState().retryTask(task));
-  const toggle = (task: Task) => void run(() => useStore.getState().toggle(task));
-  const reveal = (task: Task) => void run(async () => {
-    const path = task.files[0]?.path;
-    if (!path) throw new Error("aria2 has not provided a file path for this download.");
-    await revealItemInDir(path);
-  });
-  const openFile = (path: string) => void run(async () => {
-    if (!path) throw new Error("aria2 has not provided a file path for this download.");
-    await invoke("open_download_file", { path });
-  });
+  const retry = (task: Task) =>
+    void run(() => useStore.getState().retryTask(task));
+  const toggle = (task: Task) =>
+    void run(() => useStore.getState().toggle(task));
+  const reveal = (task: Task) =>
+    void run(async () => {
+      const path = task.files[0]?.path;
+      if (!path)
+        throw new Error(
+          "aria2 has not provided a file path for this download."
+        );
+      await revealItemInDir(path);
+    });
+  const openFile = (path: string) =>
+    void run(async () => {
+      if (!path)
+        throw new Error(
+          "aria2 has not provided a file path for this download."
+        );
+      await invoke("open_download_file", { path });
+    });
   const open = (task: Task) => openFile(task.files[0]?.path ?? "");
   const selectRow = (gid: string, event: ReactMouseEvent) => {
     const index = taskRows.findIndex((task) => task.gid === gid);
-    const anchorIndex = anchor.current ? taskRows.findIndex((task) => task.gid === anchor.current) : index;
+    const anchorIndex = anchor.current
+      ? taskRows.findIndex((task) => task.gid === anchor.current)
+      : index;
     if (event.shiftKey && index >= 0 && anchorIndex >= 0) {
-      const range = taskRows.slice(Math.min(index, anchorIndex), Math.max(index, anchorIndex) + 1);
-      setSelected((current) => new Set(event.ctrlKey || event.metaKey
-        ? [...current, ...range.map((task) => task.gid)]
-        : range.map((task) => task.gid)));
+      const range = taskRows.slice(
+        Math.min(index, anchorIndex),
+        Math.max(index, anchorIndex) + 1
+      );
+      setSelected(
+        (current) =>
+          new Set(
+            event.ctrlKey || event.metaKey
+              ? [...current, ...range.map((task) => task.gid)]
+              : range.map((task) => task.gid)
+          )
+      );
     } else if (event.ctrlKey || event.metaKey) {
       setSelected((current) => {
         const next = new Set(current);
@@ -302,7 +487,12 @@ export default function TaskTable() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
-      if (target instanceof HTMLElement && (target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(target.tagName))) return;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          /INPUT|TEXTAREA|SELECT/.test(target.tagName))
+      )
+        return;
       if (isHistory) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
@@ -319,23 +509,32 @@ export default function TaskTable() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isHistory, online]);
-  const runSelection = (paused: boolean) => void run(async () => {
-    await Promise.all(selectedTasks
-      .filter((task) => paused
-        ? task.state === "dl" || task.state === "seed" || task.queued
-        : task.state === "pa" && !task.queued)
-      .map((task) => useStore.getState().toggle(task)));
-  });
-  const confirmRemove = () => void run(async () => {
-    const errors: string[] = [];
-    for (const task of confirmTasks) {
-      try { await useStore.getState().removeTask(task, deleteFiles); }
-      catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
-    }
-    setConfirmTasks([]);
-    setSelected(new Set());
-    if (errors.length) throw new Error(errors.join("\n"));
-  });
+  const runSelection = (paused: boolean) =>
+    void run(async () => {
+      await Promise.all(
+        selectedTasks
+          .filter((task) =>
+            paused
+              ? task.state === "dl" || task.state === "seed" || task.queued
+              : task.state === "pa" && !task.queued
+          )
+          .map((task) => useStore.getState().toggle(task))
+      );
+    });
+  const confirmRemove = () =>
+    void run(async () => {
+      const errors: string[] = [];
+      for (const task of confirmTasks) {
+        try {
+          await useStore.getState().removeTask(task, deleteFiles);
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      setConfirmTasks([]);
+      setSelected(new Set());
+      if (errors.length) throw new Error(errors.join("\n"));
+    });
   const context = (event: React.MouseEvent, task: Task) => {
     event.preventDefault();
     if (!online) return;
@@ -345,15 +544,47 @@ export default function TaskTable() {
   return (
     <div className="tbl">
       <div className="task-table-toolbar">
-        <span className="lbl">Downloads <span className="download-count">{rows.length}</span></span>
+        <span className="lbl">
+          Downloads <span className="download-count">{rows.length}</span>
+        </span>
       </div>
-      {selectedTasks.length > 0 && !isHistory && <div className="selection-bar" role="toolbar" aria-label={`${selectedTasks.length} downloads selected`}>
-        <span>{selectedTasks.length} selected</span>
-        <button className="secondary-button" disabled={!online} onClick={() => runSelection(true)}>Pause</button>
-        <button className="secondary-button" disabled={!online} onClick={() => runSelection(false)}>Resume</button>
-        <button className="secondary-button" disabled={!online} onClick={requestRemoveSelection}>Remove</button>
-        <button className="selection-clear" aria-label="Clear selection" onClick={() => setSelected(new Set())}>×</button>
-      </div>}
+      {selectedTasks.length > 0 && !isHistory && (
+        <div
+          className="selection-bar"
+          role="toolbar"
+          aria-label={`${selectedTasks.length} downloads selected`}
+        >
+          <span>{selectedTasks.length} selected</span>
+          <button
+            className="secondary-button"
+            disabled={!online}
+            onClick={() => runSelection(true)}
+          >
+            Pause
+          </button>
+          <button
+            className="secondary-button"
+            disabled={!online}
+            onClick={() => runSelection(false)}
+          >
+            Resume
+          </button>
+          <button
+            className="secondary-button"
+            disabled={!online}
+            onClick={requestRemoveSelection}
+          >
+            Remove
+          </button>
+          <button
+            className="selection-clear"
+            aria-label="Clear selection"
+            onClick={() => setSelected(new Set())}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="grid">
         <div className="row head">
           <span>NAME</span>
@@ -363,8 +594,17 @@ export default function TaskTable() {
           <span>SEEDS</span>
           <span>PEERS</span>
         </div>
-        {hasOfflineTasks && <div className="connection-banner" role="status">{connectedOnce ? "Connection lost. Reconnecting..." : "Connecting to the download engine..."}</div>}
-        <div className={`task-scroll${hasOfflineTasks ? " connection-lost" : ""}`} ref={parentRef}>
+        {hasOfflineTasks && (
+          <div className="connection-banner" role="status">
+            {connectedOnce
+              ? "Connection lost. Reconnecting..."
+              : "Connecting to the download engine..."}
+          </div>
+        )}
+        <div
+          className={`task-scroll${hasOfflineTasks ? " connection-lost" : ""}`}
+          ref={parentRef}
+        >
           {rows.length ? (
             <div
               className="virtual-list"
@@ -378,32 +618,80 @@ export default function TaskTable() {
                     className="virtual-row"
                     data-key={row.kind === "task" ? row.task.gid : row.entry.id}
                     ref={(element) => {
-                      const key = row.kind === "task" ? row.task.gid : row.entry.id;
+                      const key =
+                        row.kind === "task" ? row.task.gid : row.entry.id;
                       if (element) rowRefs.current.set(key, element);
                       else rowRefs.current.delete(key);
                     }}
                     style={{ height: item.size }}
                   >
                     {row.kind === "history" ? (
-                      <CompletedRow entry={row.entry} task={tasks.find((task) => task.gid === row.entry.id)} online={online} onRemove={remove} onReveal={reveal} onOpen={openFile} onContext={context} />
+                      <CompletedRow
+                        entry={row.entry}
+                        task={tasks.find((task) => task.gid === row.entry.id)}
+                        online={online}
+                        onRemove={remove}
+                        onReveal={reveal}
+                        onOpen={openFile}
+                        onContext={context}
+                      />
                     ) : (
-                      <Row t={row.task} sel={selected.size ? selected.has(row.task.gid) : row.task.gid === sel} disabled={!online} onRemove={remove} onToggle={toggle} onRetry={retry} onReveal={reveal} onOpen={open} onSelect={selectRow} onContext={context} />
+                      <Row
+                        t={row.task}
+                        sel={
+                          selected.size
+                            ? selected.has(row.task.gid)
+                            : row.task.gid === sel
+                        }
+                        disabled={!online}
+                        onRemove={remove}
+                        onToggle={toggle}
+                        onRetry={retry}
+                        onReveal={reveal}
+                        onOpen={open}
+                        onSelectFiles={setFileSelection}
+                        onSelect={selectRow}
+                        onContext={context}
+                      />
                     )}
                   </div>
                 );
               })}
             </div>
+          ) : showEngineState ? (
+            <div className="engine-state" role="status">
+              <span
+                className={`engine-spinner${offlineTimedOut ? " failed" : ""}`}
+                aria-hidden="true"
+              />
+              <strong>
+                {offlineTimedOut
+                  ? "Can't reach the download engine"
+                  : "Starting the download engine..."}
+              </strong>
+              {offlineTimedOut && (
+                <>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      setOfflineTimedOut(false);
+                      setRetryVersion((version) => version + 1);
+                      useStore.getState().reconnect();
+                    }}
+                  >
+                    Retry
+                  </button>
+                  {rpcUrl && (
+                    <details>
+                      <summary>Details</summary>
+                      <code>{rpcUrl}</code>
+                    </details>
+                  )}
+                </>
+              )}
+            </div>
           ) : (
-            showEngineState ? (
-              <div className="engine-state" role="status">
-                <span className={`engine-spinner${offlineTimedOut ? " failed" : ""}`} aria-hidden="true" />
-                <strong>{offlineTimedOut ? "Can't reach the download engine" : "Starting the download engine..."}</strong>
-                {offlineTimedOut && <>
-                  <button className="secondary-button" onClick={() => { setOfflineTimedOut(false); setRetryVersion((version) => version + 1); useStore.getState().reconnect(); }}>Retry</button>
-                  {rpcUrl && <details><summary>Details</summary><code>{rpcUrl}</code></details>}
-                </>}
-              </div>
-            ) : <div className="empty">{emptyText}</div>
+            <div className="empty">{emptyText}</div>
           )}
         </div>
         {isHistory && history.length > 0 && (
@@ -414,26 +702,152 @@ export default function TaskTable() {
           </div>
         )}
       </div>
-      {actionError && <div className="table-error" role="alert">{actionError}</div>}
-      {menu && online && <div className="task-context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
-        {(menu.task.state === "dl" || menu.task.state === "seed" || menu.task.state === "pa") && <button role="menuitem" onClick={() => void run(() => useStore.getState().toggle(menu.task))}>{menu.task.state === "pa" && !menu.task.queued ? "Resume" : "Pause"}</button>}
-        {menu.task.state === "err" && <button role="menuitem" onClick={() => retry(menu.task)}>Retry</button>}
-        <button role="menuitem" onClick={() => remove(menu.task)}>Remove</button>
-        <button role="menuitem" disabled={!menu.task.files[0]?.path} onClick={() => reveal(menu.task)}>Show in folder</button>
-        <button role="menuitem" onClick={() => void run(async () => {
-          const uri = (await useStore.getState().taskUris(menu.task.gid))[0];
-          if (!uri) throw new Error("No source URL is available to copy.");
-          await navigator.clipboard.writeText(uri);
-        })}>Copy link</button>
-      </div>}
-      {confirmTasks.length > 0 && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirmTasks([]); }}>
-        <section className="add-dialog remove-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-title">
-          <div className="modal-heading"><div><div className="lbl">REMOVE DOWNLOAD</div><h2 id="remove-title">Remove {confirmTasks.length === 1 ? confirmTasks[0].name : `${confirmTasks.length} downloads`}?</h2></div><button className="modal-close" aria-label="Close" onClick={() => setConfirmTasks([])}>×</button></div>
-          {confirmTasks.length > 1 && <div className="remove-list">{confirmTasks.slice(0, 5).map((task) => <div key={task.gid}>{task.name}</div>)}{confirmTasks.length > 5 && <div>and {confirmTasks.length - 5} more</div>}</div>}
-          <label className="modal-checkbox"><input type="checkbox" checked={deleteFiles} onChange={(event) => setDeleteFiles(event.target.checked)} />Also delete downloaded files</label>
-          <div className="modal-footer"><button className="secondary-button" onClick={() => setConfirmTasks([])}>Cancel</button><button className="primary-button" disabled={!online} onClick={confirmRemove}>Remove</button></div>
-        </section>
-      </div>}
+      {actionError && (
+        <div className="table-error" role="alert">
+          {actionError}
+        </div>
+      )}
+      {menu && online && (
+        <div
+          className="task-context-menu"
+          role="menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {(menu.task.state === "dl" ||
+            menu.task.state === "seed" ||
+            menu.task.state === "pa") && (
+            <button
+              role="menuitem"
+              onClick={() =>
+                void run(() => useStore.getState().toggle(menu.task))
+              }
+            >
+              {menu.task.state === "pa" && !menu.task.queued
+                ? "Resume"
+                : "Pause"}
+            </button>
+          )}
+          {menu.task.state === "err" && (
+            <button role="menuitem" onClick={() => retry(menu.task)}>
+              Retry
+            </button>
+          )}
+          {menu.task.torrent &&
+            (menu.task.state === "pa" || menu.task.state === "dl") && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setFileSelection(menu.task);
+                  setMenu(undefined);
+                }}
+              >
+                Select files
+              </button>
+            )}
+          <button role="menuitem" onClick={() => remove(menu.task)}>
+            Remove
+          </button>
+          <button
+            role="menuitem"
+            disabled={!menu.task.files[0]?.path}
+            onClick={() => reveal(menu.task)}
+          >
+            Show in folder
+          </button>
+          <button
+            role="menuitem"
+            onClick={() =>
+              void run(async () => {
+                const uri = (
+                  await useStore.getState().taskUris(menu.task.gid)
+                )[0];
+                if (!uri)
+                  throw new Error("No source URL is available to copy.");
+                await navigator.clipboard.writeText(uri);
+              })
+            }
+          >
+            Copy link
+          </button>
+        </div>
+      )}
+      {confirmTasks.length > 0 && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setConfirmTasks([]);
+          }}
+        >
+          <section
+            className="add-dialog remove-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <div className="lbl">REMOVE DOWNLOAD</div>
+                <h2 id="remove-title">
+                  Remove{" "}
+                  {confirmTasks.length === 1
+                    ? confirmTasks[0].name
+                    : `${confirmTasks.length} downloads`}
+                  ?
+                </h2>
+              </div>
+              <button
+                className="modal-close"
+                aria-label="Close"
+                onClick={() => setConfirmTasks([])}
+              >
+                ×
+              </button>
+            </div>
+            {confirmTasks.length > 1 && (
+              <div className="remove-list">
+                {confirmTasks.slice(0, 5).map((task) => (
+                  <div key={task.gid}>{task.name}</div>
+                ))}
+                {confirmTasks.length > 5 && (
+                  <div>and {confirmTasks.length - 5} more</div>
+                )}
+              </div>
+            )}
+            <label className="modal-checkbox">
+              <input
+                type="checkbox"
+                checked={deleteFiles}
+                onChange={(event) => setDeleteFiles(event.target.checked)}
+              />
+              Also delete downloaded files
+            </label>
+            <div className="modal-footer">
+              <button
+                className="secondary-button"
+                onClick={() => setConfirmTasks([])}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                disabled={!online}
+                onClick={confirmRemove}
+              >
+                Remove
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {fileSelection && (
+        <SelectFilesDialog
+          key={fileSelection.gid}
+          gid={fileSelection.gid}
+          wasActive={fileSelection.state === "dl"}
+          onClose={() => setFileSelection(undefined)}
+        />
+      )}
     </div>
   );
 }

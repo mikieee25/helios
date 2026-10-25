@@ -5,10 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
+import { readValue, writeValue } from "@/lib/persistence";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const isTorrent = (path: string) => /\.torrent$/i.test(path);
-const validUri = (value: string) => /^(https?|ftp):\/\/|^magnet:\?/i.test(value);
+const validUri = (value: string) =>
+  /^(https?|ftp):\/\/|^magnet:\?/i.test(value);
 
 function toBase64(bytes: Uint8Array) {
   let binary = "";
@@ -23,18 +25,21 @@ export default function AddDialog({
   initialPath,
   onClose,
   onDropOpen,
+  onSelectFiles,
 }: {
   open: boolean;
   initialLinks?: string;
   initialPath?: string;
   onClose(): void;
   onDropOpen(links?: string, path?: string): void;
+  onSelectFiles(gid: string, metadata: boolean, cleanupGids?: string[]): void;
 }) {
   const settings = useStore((s) => s.settings);
   const dialogRef = useRef<HTMLFormElement>(null);
   const [links, setLinks] = useState("");
   const [directory, setDirectory] = useState("");
   const [paused, setPaused] = useState(false);
+  const [chooseFiles, setChooseFiles] = useState(false);
   const [torrent, setTorrent] = useState("");
   const [torrentName, setTorrentName] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
@@ -45,6 +50,7 @@ export default function AddDialog({
     setLinks(initialLinks ?? "");
     setDirectory(settings.downloadDir);
     setPaused(false);
+    void readValue("chooseFilesBeforeStarting", false).then(setChooseFiles);
     setTorrent("");
     setTorrentName("");
     setErrors([]);
@@ -74,12 +80,16 @@ export default function AddDialog({
   useEffect(() => {
     if (!isOpen) return;
     const previousFocus = document.activeElement as HTMLElement | null;
-    const focusFrame = requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLElement>("[autofocus]")?.focus());
+    const focusFrame = requestAnimationFrame(() =>
+      dialogRef.current?.querySelector<HTMLElement>("[autofocus]")?.focus()
+    );
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
       } else if (event.key === "Tab") {
-        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), textarea, input:not(:disabled)");
+        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), textarea, input:not(:disabled)"
+        );
         if (!focusable?.length) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
@@ -142,8 +152,14 @@ export default function AddDialog({
         });
         return;
       }
-      const text = event.dataTransfer?.getData("text/uri-list") || event.dataTransfer?.getData("text/plain") || "";
-      const droppedLinks = text.split(/\r?\n/).filter((line) => validUri(line.trim())).map((line) => line.trim());
+      const text =
+        event.dataTransfer?.getData("text/uri-list") ||
+        event.dataTransfer?.getData("text/plain") ||
+        "";
+      const droppedLinks = text
+        .split(/\r?\n/)
+        .filter((line) => validUri(line.trim()))
+        .map((line) => line.trim());
       if (droppedLinks.length) {
         onDropOpen(droppedLinks.join("\n"));
         setTorrent("");
@@ -173,7 +189,11 @@ export default function AddDialog({
 
   async function chooseDirectory() {
     if (!isTauri()) return;
-    const path = await open({ directory: true, multiple: false, title: "Choose destination folder" });
+    const path = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose destination folder",
+    });
     if (typeof path === "string") setDirectory(path);
   }
 
@@ -187,21 +207,63 @@ export default function AddDialog({
     };
     try {
       if (torrent) {
-        await useStore.getState().addTorrent(torrent, options);
+        const gid = await useStore
+          .getState()
+          .addTorrent(
+            torrent,
+            chooseFiles ? { ...options, pause: "true" } : options
+          );
         onClose();
+        if (chooseFiles) onSelectFiles(gid, false, [gid]);
         return;
       }
-      const allLines = links.split(/\r?\n/).map((uri, index) => ({ uri: uri.trim(), line: index + 1 })).filter(({ uri }) => uri);
+      const allLines = links
+        .split(/\r?\n/)
+        .map((uri, index) => ({ uri: uri.trim(), line: index + 1 }))
+        .filter(({ uri }) => uri);
       if (!allLines.length) {
-        setErrors(["Enter one or more download links, or choose a .torrent file."]);
+        setErrors([
+          "Enter one or more download links, or choose a .torrent file.",
+        ]);
         return;
       }
       const valid = allLines.filter(({ uri }) => validUri(uri));
-      const errorsByLine = allLines.filter(({ uri }) => !validUri(uri)).map(({ line, uri }) => `Line ${line}: unsupported link: ${uri}`);
-      const results = await useStore.getState().addUris(valid.map(({ uri }) => uri), options);
-      results.forEach((error, index) => {
-        if (error) errorsByLine.push(`Line ${valid[index].line}: ${error}`);
-      });
+      const errorsByLine = allLines
+        .filter(({ uri }) => !validUri(uri))
+        .map(({ line, uri }) => `Line ${line}: unsupported link: ${uri}`);
+      if (chooseFiles) {
+        const magnets = valid.filter(({ uri }) => /^magnet:\?/i.test(uri));
+        const ordinary = valid.filter(({ uri }) => !/^magnet:\?/i.test(uri));
+        const results = await useStore.getState().addUris(
+          ordinary.map(({ uri }) => uri),
+          options
+        );
+        results.forEach((error, index) => {
+          if (error)
+            errorsByLine.push(`Line ${ordinary[index].line}: ${error}`);
+        });
+        for (const { uri, line } of magnets) {
+          try {
+            const gid = await useStore.getState().addUri(uri, {
+              ...(directory.trim() ? { dir: directory.trim() } : {}),
+              "pause-metadata": "true",
+            });
+            onSelectFiles(gid, true, [gid]);
+          } catch (error) {
+            errorsByLine.push(
+              `Line ${line}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+      } else {
+        const results = await useStore.getState().addUris(
+          valid.map(({ uri }) => uri),
+          options
+        );
+        results.forEach((error, index) => {
+          if (error) errorsByLine.push(`Line ${valid[index].line}: ${error}`);
+        });
+      }
       if (errorsByLine.length) setErrors(errorsByLine);
       else onClose();
     } catch (error) {
@@ -212,25 +274,114 @@ export default function AddDialog({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <form ref={dialogRef} className="add-dialog" role="dialog" aria-modal="true" aria-labelledby="add-title" onSubmit={submit}>
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <form
+        ref={dialogRef}
+        className="add-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-title"
+        onSubmit={submit}
+      >
         <div className="modal-heading">
-          <div><span className="lbl">New transfer</span><h2 id="add-title">Add download</h2></div>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>×</button>
+          <div>
+            <span className="lbl">New transfer</span>
+            <h2 id="add-title">Add download</h2>
+          </div>
+          <button
+            type="button"
+            className="modal-close"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            ×
+          </button>
         </div>
-        <label className="modal-field">Links
-          <textarea autoFocus value={links} onChange={(event) => { setLinks(event.target.value); setTorrent(""); setTorrentName(""); }} placeholder={"Paste one link per line\nHTTP, HTTPS, FTP, or magnet"} rows={5} />
+        <label className="modal-field">
+          Links
+          <textarea
+            autoFocus
+            value={links}
+            onChange={(event) => {
+              setLinks(event.target.value);
+              setTorrent("");
+              setTorrentName("");
+            }}
+            placeholder={"Paste one link per line\nHTTP, HTTPS, FTP, or magnet"}
+            rows={5}
+          />
         </label>
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={() => void chooseTorrent()}>Choose .torrent file</button>
-          {torrentName && <span className="modal-file" title={torrentName}>{torrentName}</span>}
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void chooseTorrent()}
+          >
+            Choose .torrent file
+          </button>
+          {torrentName && (
+            <span className="modal-file" title={torrentName}>
+              {torrentName}
+            </span>
+          )}
         </div>
-        <label className="modal-field">Destination folder
-          <span className="modal-folder"><input value={directory} onChange={(event) => setDirectory(event.target.value)} placeholder="Default download folder" /><button type="button" className="secondary-button" onClick={() => void chooseDirectory()}>Browse</button></span>
+        <label className="modal-field">
+          Destination folder
+          <span className="modal-folder">
+            <input
+              value={directory}
+              onChange={(event) => setDirectory(event.target.value)}
+              placeholder="Default download folder"
+            />
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void chooseDirectory()}
+            >
+              Browse
+            </button>
+          </span>
         </label>
-        <label className="modal-checkbox"><input type="checkbox" checked={paused} onChange={(event) => setPaused(event.target.checked)} /> Start paused</label>
-        {errors.length > 0 && <div className="modal-errors" role="alert">{errors.map((error) => <div key={error}>{error}</div>)}</div>}
-        <div className="modal-footer"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? "Adding…" : "Add download"}</button></div>
+        <label className="modal-checkbox">
+          <input
+            type="checkbox"
+            checked={paused}
+            onChange={(event) => setPaused(event.target.checked)}
+          />{" "}
+          Start paused
+        </label>
+        <label className="modal-checkbox">
+          <input
+            type="checkbox"
+            checked={chooseFiles}
+            onChange={(event) => {
+              setChooseFiles(event.target.checked);
+              void writeValue(
+                "chooseFilesBeforeStarting",
+                event.target.checked
+              );
+            }}
+          />{" "}
+          Choose files before starting
+        </label>
+        {errors.length > 0 && (
+          <div className="modal-errors" role="alert">
+            {errors.map((error) => (
+              <div key={error}>{error}</div>
+            ))}
+          </div>
+        )}
+        <div className="modal-footer">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary-button" disabled={busy}>
+            {busy ? "Adding…" : "Add download"}
+          </button>
+        </div>
       </form>
     </div>
   );

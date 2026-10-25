@@ -1,7 +1,7 @@
 "use client";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
-import { useStore } from "@/lib/store";
+import { DEFAULT_SETTINGS, useStore, validateProxy } from "@/lib/store";
 
 function NumberSetting({
   label,
@@ -52,13 +52,63 @@ function NumberSetting({
   );
 }
 
+function SectionHeading({
+  title,
+  onReset,
+}: {
+  title: string;
+  onReset(): void;
+}) {
+  return (
+    <div className="settings-section-heading">
+      <h2 id={`${title.toLowerCase()}-settings-title`}>{title}</h2>
+      <button type="button" onClick={onReset}>
+        Reset section
+      </button>
+    </div>
+  );
+}
+
 export default function Settings() {
   const settings = useStore((s) => s.settings);
   const error = useStore((s) => s.settingsError);
   const update = useStore((s) => s.updateSettings);
   const updateAutostart = useStore((s) => s.updateAutostart);
+  const [proxy, setProxy] = useState(() => ({
+    proxyMode: settings.proxyMode,
+    proxyUrl: settings.proxyUrl,
+    proxyUser: settings.proxyUser,
+    proxyPassword: settings.proxyPassword,
+    noProxy: settings.noProxy,
+  }));
+  const [proxyError, setProxyError] = useState("");
   const inTauri =
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  useEffect(() => {
+    setProxy({
+      proxyMode: settings.proxyMode,
+      proxyUrl: settings.proxyUrl,
+      proxyUser: settings.proxyUser,
+      proxyPassword: settings.proxyPassword,
+      noProxy: settings.noProxy,
+    });
+  }, [
+    settings.proxyMode,
+    settings.proxyUrl,
+    settings.proxyUser,
+    settings.proxyPassword,
+    settings.noProxy,
+  ]);
+
+  function changeProxy(patch: Partial<typeof proxy>) {
+    const next = { ...proxy, ...patch };
+    setProxy(next);
+    const validation =
+      next.proxyMode === "manual" ? validateProxy(next.proxyUrl) : undefined;
+    setProxyError(validation ?? "");
+    if (!validation) void update(next);
+  }
 
   async function chooseFolder() {
     const selected = await open({
@@ -135,7 +185,9 @@ export default function Settings() {
               <input
                 type="checkbox"
                 checked={settings.closeToTray}
-                onChange={(event) => void update({ closeToTray: event.target.checked })}
+                onChange={(event) =>
+                  void update({ closeToTray: event.target.checked })
+                }
               />
             </label>
             <label className="setting-field setting-check">
@@ -149,6 +201,207 @@ export default function Settings() {
           </>
         )}
       </div>
+      <section
+        className="settings-section"
+        aria-labelledby="network-settings-title"
+      >
+        <SectionHeading
+          title="Network"
+          onReset={() => {
+            const reset = {
+              proxyMode: DEFAULT_SETTINGS.proxyMode,
+              proxyUrl: DEFAULT_SETTINGS.proxyUrl,
+              proxyUser: DEFAULT_SETTINGS.proxyUser,
+              proxyPassword: DEFAULT_SETTINGS.proxyPassword,
+              noProxy: DEFAULT_SETTINGS.noProxy,
+            };
+            setProxy(reset);
+            setProxyError("");
+            void update(reset);
+          }}
+        />
+        <label className="setting-field">
+          <span>Proxy</span>
+          <select
+            value={proxy.proxyMode}
+            onChange={(event) =>
+              changeProxy({
+                proxyMode: event.target.value as typeof proxy.proxyMode,
+              })
+            }
+          >
+            <option value="none">None</option>
+            <option value="manual">Manual</option>
+          </select>
+        </label>
+        {proxy.proxyMode === "manual" && (
+          <div className="settings-section-fields">
+            <label className="setting-field">
+              <span>Proxy address</span>
+              <input
+                type="text"
+                autoComplete="url"
+                value={proxy.proxyUrl}
+                placeholder="http://host:3128"
+                onChange={(event) =>
+                  changeProxy({ proxyUrl: event.target.value })
+                }
+              />
+            </label>
+            <label className="setting-field">
+              <span>Username</span>
+              <input
+                type="text"
+                autoComplete="username"
+                value={proxy.proxyUser}
+                onChange={(event) =>
+                  changeProxy({ proxyUser: event.target.value })
+                }
+              />
+            </label>
+            <label className="setting-field">
+              <span>Password</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={proxy.proxyPassword}
+                onChange={(event) =>
+                  changeProxy({ proxyPassword: event.target.value })
+                }
+              />
+            </label>
+            <label className="setting-field">
+              <span>Bypass hosts</span>
+              <input
+                type="text"
+                value={proxy.noProxy}
+                placeholder="localhost, 127.0.0.1"
+                onChange={(event) =>
+                  changeProxy({ noProxy: event.target.value })
+                }
+              />
+            </label>
+          </div>
+        )}
+        {proxyError && (
+          <p className="settings-error inline-settings-error" role="alert">
+            {proxyError}
+          </p>
+        )}
+        <p className="settings-section-note">
+          Applies to new downloads only. The password is stored in the app's
+          local settings file.
+        </p>
+      </section>
+      <section
+        className="settings-section"
+        aria-labelledby="seeding-settings-title"
+      >
+        <SectionHeading
+          title="Seeding"
+          onReset={() =>
+            void update({
+              seedRatio: DEFAULT_SETTINGS.seedRatio,
+              seedTimeHours: DEFAULT_SETTINGS.seedTimeHours,
+              neverSeed: DEFAULT_SETTINGS.neverSeed,
+            })
+          }
+        />
+        <NumberSetting
+          label="Stop at share ratio"
+          value={settings.seedRatio}
+          min={0}
+          max={1000}
+          step={0.1}
+          unit="0 disables ratio limit"
+          update={(value) => void update({ seedRatio: value })}
+        />
+        <label className="setting-field">
+          <span>Maximum seeding time</span>
+          <span className="setting-input">
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={settings.seedTimeHours}
+              disabled={settings.neverSeed}
+              onChange={(event) =>
+                void update({
+                  seedTimeHours:
+                    event.target.value === ""
+                      ? ""
+                      : Math.max(0, Number(event.target.value)),
+                })
+              }
+            />
+            <small>hours · empty is unlimited</small>
+          </span>
+        </label>
+        <label className="setting-field setting-check">
+          <span>Never seed</span>
+          <input
+            type="checkbox"
+            checked={settings.neverSeed}
+            onChange={(event) =>
+              void update({ neverSeed: event.target.checked })
+            }
+          />
+        </label>
+        {settings.neverSeed ? (
+          <p className="settings-section-note">
+            Torrents stop seeding immediately after completion.
+          </p>
+        ) : (
+          <p
+            className={`settings-section-note${settings.seedRatio === 0 && settings.seedTimeHours === "" ? " settings-warning" : ""}`}
+          >
+            {settings.seedRatio === 0 && settings.seedTimeHours === ""
+              ? "Torrents will seed forever."
+              : "aria2 stops seeding when either limit is reached."}
+          </p>
+        )}
+        <p className="settings-section-note">Applies to new downloads only.</p>
+      </section>
+      <section
+        className="settings-section"
+        aria-labelledby="files-settings-title"
+      >
+        <SectionHeading
+          title="Files"
+          onReset={() =>
+            void update({ fileConflict: DEFAULT_SETTINGS.fileConflict })
+          }
+        />
+        <label className="setting-field">
+          <span>When a file already exists</span>
+          <select
+            value={settings.fileConflict}
+            onChange={(event) =>
+              void update({
+                fileConflict: event.target
+                  .value as typeof settings.fileConflict,
+              })
+            }
+          >
+            <option value="rename">Rename</option>
+            <option value="overwrite">Overwrite</option>
+            <option value="error">Show error</option>
+          </select>
+        </label>
+        <p className="settings-section-note">
+          {settings.fileConflict === "rename"
+            ? "Keep the existing file and save the new download under a renamed file."
+            : settings.fileConflict === "overwrite"
+              ? "Replace the existing file with the new download."
+              : "Keep the existing file and stop with an error if the name conflicts."}
+        </p>
+        {settings.fileConflict === "overwrite" && (
+          <p className="settings-section-note settings-warning">
+            Existing files can be permanently replaced.
+          </p>
+        )}
+        <p className="settings-section-note">Applies to new downloads only.</p>
+      </section>
       {error && (
         <p className="settings-error" role="alert">
           Could not apply settings: {error}

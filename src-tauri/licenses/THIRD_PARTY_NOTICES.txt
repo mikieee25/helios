@@ -1,0 +1,18 @@
+Third-party software notices
+============================
+
+aria2
+-----
+Helios bundles the unmodified aria2 1.37.0 executable as a separate program:
+https://github.com/aria2/aria2
+
+aria2 is licensed under GPL-2.0-or-later. The corresponding license text is
+provided in aria2/COPYING. The Helios MIT license does not apply to aria2.
+
+OpenSSL
+-------
+This product includes software developed by the OpenSSL Project for use in the
+OpenSSL Toolkit (http://www.openssl.org/). It also includes cryptographic
+software written by Eric Young (eay@cryptsoft.com) and software written by Tim
+Hudson (tjh@cryptsoft.com). See aria2/LICENSE.OpenSSL for the complete OpenSSL
+and original SSLeay license terms.

@@ -3,17 +3,51 @@
   "productName": "Helios",
   "version": "0.1.0",
   "identifier": "app.helios.downloads",
-  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:3000", "beforeBuildCommand": "npm run build", "frontendDist": "../out" },
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../out"
+  },
   "app": {
-    "windows": [{ "title": "Helios", "width": 1240, "height": 820, "minWidth": 900, "minHeight": 600, "decorations": false, "shadow": false }],
-    "security": { "csp": null }
+    "windows": [
+      {
+        "title": "Helios",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": false,
+        "shadow": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:* ws://localhost:3000 http://localhost:3000; object-src 'none'; base-uri 'none'; frame-src 'none'",
+      "freezePrototype": true
+    }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
     "externalBin": ["binaries/aria2c"],
-    "icon": ["icons/icon.png"],
-    "fileAssociations": [{ "ext": ["torrent"], "name": "BitTorrent file", "mimeType": "application/x-bittorrent", "role": "Viewer" }]
+    "targets": ["nsis"],
+    "resources": ["licenses/"],
+    "windows": { "webviewInstallMode": { "type": "embedBootstrapper" } },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["torrent"],
+        "name": "BitTorrent file",
+        "mimeType": "application/x-bittorrent",
+        "role": "Viewer"
+      }
+    ]
   },
   "plugins": { "deep-link": { "desktop": { "schemes": ["magnet"] } } }
 }
