@@ -16,7 +16,7 @@ type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: nu
 type Section = "Downloads" | "Files" | "Network" | "Seeding" | "Notifications" | "Browser integration" | "Behavior" | "Appearance" | "App" | "Advanced";
 
 function Choice({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: [string, string][] }) {
-  return <SelectField aria-label={label} value={value} onChange={(event) => onChange(event.target.value)}>{options.map(([key, optionLabel]) => <option key={key} value={key}>{optionLabel}</option>)}</SelectField>;
+  return <SelectField label={label} value={value} onChange={onChange} options={options} />;
 }
 
 function BrowserIntegration({ enabled, save, saved }: { enabled: boolean; save: (patch: Partial<SettingsType>) => void; saved: boolean }) {

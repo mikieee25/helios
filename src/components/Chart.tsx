@@ -98,6 +98,7 @@ export default function Chart() {
       <svg
         ref={ref}
         viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
         role="img"
         aria-label="Transfer speed over the last minute"
       />
