@@ -19,6 +19,8 @@ export default function Sidebar() {
   const notify = useStore((s) => s.notify);
   const view = useStore((s) => s.view);
   const ready = useStore((s) => s.ready);
+  const theme = useStore((s) => s.settings.theme);
+  const updateSettings = useStore((s) => s.updateSettings);
   const setFilter = useStore((s) => s.setFilter);
   const counts = [
     buildOverview(tasks, history, category).length,
@@ -73,8 +75,12 @@ export default function Sidebar() {
   }, [seedingCount, completedCount]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-  }, [dark]);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setDark(theme === "system" ? media.matches : theme === "dark");
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
 
   return (
     <aside className="side">
@@ -142,7 +148,7 @@ export default function Sidebar() {
             className="sw"
             aria-label="Dark theme"
             aria-pressed={dark}
-            onClick={() => setDark(!dark)}
+            onClick={() => void updateSettings({ theme: dark ? "light" : "dark" })}
           />
         </div>
       </div>

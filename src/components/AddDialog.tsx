@@ -5,7 +5,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
-import { readValue, writeValue } from "@/lib/persistence";
 import { bridgeItemOptions, type BridgeAddItem } from "@/lib/bridge";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
@@ -55,7 +54,7 @@ export default function AddDialog({
     setBridgeItems(initialBridgeItems ?? []);
     setDirectory(settings.downloadDir);
     setPaused(false);
-    void readValue("chooseFilesBeforeStarting", false).then(setChooseFiles);
+    setChooseFiles(settings.chooseFilesBeforeStarting);
     setTorrent("");
     setTorrentName("");
     setErrors([]);
@@ -404,10 +403,9 @@ export default function AddDialog({
             checked={chooseFiles}
             onChange={(event) => {
               setChooseFiles(event.target.checked);
-              void writeValue(
-                "chooseFilesBeforeStarting",
-                event.target.checked
-              );
+              void useStore.getState().updateSettings({
+                chooseFilesBeforeStarting: event.target.checked,
+              });
             }}
           />{" "}
           Choose files before starting

@@ -56,6 +56,18 @@ export type Settings = {
   fileConflict: "rename" | "overwrite" | "error";
   fasterDnsFallback: boolean;
   diskAllocation: "none" | "prealloc" | "falloc";
+  notifyFinished: boolean;
+  notifyFailed: boolean;
+  notifyBrowserAdds: boolean;
+  confirmBeforeRemoving: boolean;
+  deleteFilesWhenRemoving: boolean;
+  chooseFilesBeforeStarting: boolean;
+  theme: "system" | "dark" | "light";
+  compactList: boolean;
+  reduceMotion: boolean;
+  startMinimized: boolean;
+  connectTimeoutSeconds: number;
+  customUserAgent: string;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -78,6 +90,18 @@ export const DEFAULT_SETTINGS: Settings = {
   fileConflict: "rename",
   fasterDnsFallback: false,
   diskAllocation: "prealloc",
+  notifyFinished: true,
+  notifyFailed: true,
+  notifyBrowserAdds: true,
+  confirmBeforeRemoving: true,
+  deleteFilesWhenRemoving: false,
+  chooseFilesBeforeStarting: false,
+  theme: "system",
+  compactList: false,
+  reduceMotion: false,
+  startMinimized: true,
+  connectTimeoutSeconds: 10,
+  customUserAgent: "",
 };
 export const N = 48;
 export const ARIA2_URL =
@@ -455,7 +479,7 @@ export const useStore = create<S>((set, get) => {
     set({ history: result.entries });
     if (!result.added) return;
     try {
-      if (get().notify) {
+      if (get().notify && get().settings.notifyFinished) {
         if (inTauri()) {
           if (await isPermissionGranted())
             sendNotification({ title: "Helios", body: task.name });
@@ -471,11 +495,21 @@ export const useStore = create<S>((set, get) => {
   }
 
   async function initialize() {
-    const [history, settings] = await Promise.all([
+    const [history, settings, legacyChooseFiles] = await Promise.all([
       historyStore.load(),
       readValue<Settings>("settings", DEFAULT_SETTINGS),
+      readValue<boolean>("chooseFilesBeforeStarting", false),
     ]);
-    const loadedSettings = { ...DEFAULT_SETTINGS, ...settings };
+    const loadedSettings = {
+      ...DEFAULT_SETTINGS,
+      ...settings,
+      chooseFilesBeforeStarting:
+        settings.chooseFilesBeforeStarting ?? legacyChooseFiles,
+      reduceMotion:
+        settings.reduceMotion ??
+        (typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches),
+    };
     set({
       history,
       settings: loadedSettings,
@@ -587,7 +621,7 @@ export const useStore = create<S>((set, get) => {
         void Notification.requestPermission();
     },
     async notifyAddedDownload(name) {
-      if (!get().notify) return;
+      if (!get().notify || !get().settings.notifyBrowserAdds) return;
       try {
         const body = `Added: ${name}`;
         if (inTauri()) {
