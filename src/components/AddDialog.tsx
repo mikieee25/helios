@@ -54,11 +54,14 @@ export default function AddDialog({
     setBridgeItems(initialBridgeItems ?? []);
     setDirectory(settings.downloadDir);
     setPaused(false);
-    setChooseFiles(settings.chooseFilesBeforeStarting);
     setTorrent("");
     setTorrentName("");
     setErrors([]);
   }, [isOpen, initialLinks, initialBridgeItems, settings.downloadDir]);
+
+  useEffect(() => {
+    if (isOpen) setChooseFiles(settings.chooseFilesBeforeStarting);
+  }, [isOpen, settings.chooseFilesBeforeStarting]);
 
   const loadNativeTorrent = useCallback(async (path: string) => {
     if (!isTorrent(path)) return false;

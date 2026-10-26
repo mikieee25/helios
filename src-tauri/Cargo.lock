@@ -1537,6 +1537,7 @@ name = "helios"
 version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
+ "os_info",
  "rand 0.8.8",
  "serde",
  "serde_json",
@@ -2604,6 +2605,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "objc2-ui-kit",
+ "serde",
  "windows-sys 0.61.2",
 ]
 

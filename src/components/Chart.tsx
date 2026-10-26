@@ -55,14 +55,14 @@ export default function Chart() {
     svg.innerHTML = `<defs><linearGradient id="gf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="${c};stop-opacity:.38"/><stop offset="1" style="${c};stop-opacity:0"/></linearGradient><linearGradient id="gs" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${W}" y2="0"><stop offset="0" style="${c}"/><stop offset=".7" style="${c}"/><stop offset="1" stop-color="var(--chart-line)"/></linearGradient><radialGradient id="gg"><stop offset="0" style="${c};stop-opacity:.45"/><stop offset="1" style="${c};stop-opacity:0"/></radialGradient></defs><circle id="c-g" r="70" fill="url(#gg)"/><path id="p-f" fill="url(#gf)"/><path id="p-s" fill="none" stroke="url(#gs)" stroke-width="2"/><circle id="c-d" r="5.5" fill="var(--chart-line)" stroke="var(--chart-marker-stroke)" stroke-opacity=".6" stroke-width="1.5"/>`;
     const q = (id: string) => svg.querySelector(`#${id}`)!;
     const [glow, fill, line, dot] = [q("c-g"), q("p-f"), q("p-s"), q("c-d")];
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
     let mix = 0,
       ymax = 14,
       raf = 0;
 
     // The line scrolls left continuously; its head eases toward each new sample.
     const frame = (now: number) => {
-      const { dlHist, upHist, series } = useStore.getState();
+      const { dlHist, upHist, series, settings } = useStore.getState();
+      const reduced = settings.reduceMotion;
       const tgt = series === "ul" ? 1 : 0;
       const f = reduced ? 1 : Math.min(1, (now - clock.t) / 1000);
       mix += (tgt - mix) * 0.14;

@@ -248,6 +248,10 @@ export default function TaskTable() {
   const filter = useStore((s) => s.filter);
   const category = useStore((s) => s.category);
   const online = useStore((s) => s.online);
+  const reduceMotion = useStore((s) => s.settings.reduceMotion);
+  const compactList = useStore((s) => s.settings.compactList);
+  const confirmBeforeRemoving = useStore((s) => s.settings.confirmBeforeRemoving);
+  const deleteFilesByDefault = useStore((s) => s.settings.deleteFilesWhenRemoving);
   const connectedOnce = useStore((s) => s.connectedOnce);
   const ready = useStore((s) => s.ready);
   const rpcUrl = useStore((s) => s.rpcUrl);
@@ -287,7 +291,7 @@ export default function TaskTable() {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 52,
+    estimateSize: () => compactList ? 44 : 52,
     getItemKey: (index) => {
       const row = rows[index];
       return row.kind === "task" ? row.task.gid : row.entry.id;
@@ -305,9 +309,7 @@ export default function TaskTable() {
       !reset &&
       (rowKeys.length !== previousOrder.current.length ||
         rowKeys.some((key, index) => previousOrder.current[index] !== key));
-    const isReduced = window.matchMedia(
-      "(prefers-reduced-motion: reduce)"
-    ).matches;
+    const isReduced = reduceMotion;
     const currentKeys = new Set(rowKeys);
     if (reset) positions.current.clear();
     for (const item of virtualizer.getVirtualItems()) {
@@ -421,14 +423,23 @@ export default function TaskTable() {
     setMenu(undefined);
   }
 
-  const remove = (task: Task) => {
-    setConfirmTasks([task]);
-    setDeleteFiles(false);
+  const requestRemoval = (items: Task[]) => {
+    if (!items.length) return;
+    if (confirmBeforeRemoving) {
+      setConfirmTasks(items);
+      setDeleteFiles(deleteFilesByDefault);
+      return;
+    }
+    void run(async () => {
+      await Promise.all(items.map((task) => useStore.getState().removeTask(task, deleteFilesByDefault)));
+      setSelected(new Set());
+    });
   };
+
+  const remove = (task: Task) => requestRemoval([task]);
   const requestRemoveSelection = () => {
     if (!online || !selectedTasks.length) return;
-    setConfirmTasks(selectedTasks);
-    setDeleteFiles(false);
+    requestRemoval(selectedTasks);
   };
   const retry = (task: Task) =>
     void run(() => useStore.getState().retryTask(task));
@@ -502,8 +513,7 @@ export default function TaskTable() {
       } else if (event.key === "Delete" && selectedTasksRef.current.length) {
         if (!online) return;
         event.preventDefault();
-        setConfirmTasks(selectedTasksRef.current);
-        setDeleteFiles(false);
+        requestRemoval(selectedTasksRef.current);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -602,7 +612,7 @@ export default function TaskTable() {
           </div>
         )}
         <div
-          className={`task-scroll${hasOfflineTasks ? " connection-lost" : ""}`}
+          className={`task-scroll${hasOfflineTasks ? " connection-lost" : ""}${compactList ? " compact" : ""}`}
           ref={parentRef}
         >
           {rows.length ? (

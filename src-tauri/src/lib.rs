@@ -31,14 +31,14 @@ struct Aria {
     shutting_down: Arc<AtomicBool>,
 }
 
-fn aria2_args(port: u16, secret: &str, session: &str, dir: &str) -> Vec<String> {
+fn aria2_args(port: u16, secret: &str, session: &str, dir: &str, connect_timeout: u32) -> Vec<String> {
     vec![
         "--enable-rpc".into(),
         format!("--rpc-listen-port={port}"),
         format!("--rpc-secret={secret}"),
         "--rpc-listen-all=false".into(),
         "--continue=true".into(),
-        "--connect-timeout=10".into(),
+        format!("--connect-timeout={connect_timeout}"),
         "--retry-wait=2".into(),
         "--split=16".into(),
         "--max-connection-per-server=16".into(),
@@ -55,9 +55,12 @@ fn aria2_args(port: u16, secret: &str, session: &str, dir: &str) -> Vec<String> 
 struct StartupSettings {
     #[serde(default = "default_start_minimized")]
     start_minimized: bool,
+    #[serde(default = "default_connect_timeout")]
+    connect_timeout_seconds: u32,
 }
 
 fn default_start_minimized() -> bool { true }
+fn default_connect_timeout() -> u32 { 10 }
 
 fn should_start_hidden(args: &[String], start_minimized: bool) -> bool {
     start_minimized && args.iter().any(|arg| arg == "--autostarted")
@@ -66,10 +69,10 @@ fn should_start_hidden(args: &[String], start_minimized: bool) -> bool {
 struct StartupVisibility(bool);
 
 #[tauri::command]
-fn write_startup_settings(app: AppHandle, start_minimized: bool) -> Result<(), String> {
+fn write_startup_settings(app: AppHandle, start_minimized: bool, connect_timeout_seconds: u32) -> Result<(), String> {
     let path = app.path().app_data_dir().map_err(|error| error.to_string())?.join("startup.json");
     std::fs::create_dir_all(path.parent().expect("startup path has parent")).map_err(|error| error.to_string())?;
-    let contents = serde_json::to_vec(&StartupSettings { start_minimized }).map_err(|error| error.to_string())?;
+    let contents = serde_json::to_vec(&StartupSettings { start_minimized, connect_timeout_seconds: connect_timeout_seconds.clamp(1, 60) }).map_err(|error| error.to_string())?;
     std::fs::write(path, contents).map_err(|error| error.to_string())
 }
 
@@ -379,6 +382,24 @@ fn open_download_file(app: AppHandle, path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn open_data_folder(app: AppHandle) -> Result<(), String> {
+    let path = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_licenses(app: AppHandle) -> Result<(), String> {
+    let path = app.path().resource_dir().map_err(|error| error.to_string())?.join("licenses").join("THIRD_PARTY_NOTICES.txt");
+    if !path.is_file() { return Err("Bundled license notices could not be found.".into()); }
+    app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_os_version() -> String {
+    os_info::get().to_string()
+}
+
 pub fn run() {
     let pending = PendingOpen(Arc::new(Mutex::new(PendingOpenState::default())));
     let shutting_down = Arc::new(AtomicBool::new(false));
@@ -417,6 +438,9 @@ pub fn run() {
             read_torrent_file,
             delete_files,
             open_download_file,
+            open_data_folder,
+            open_licenses,
+            get_os_version,
             begin_aria_shutdown,
             take_open_requests,
             set_autostart,
@@ -456,7 +480,7 @@ pub fn run() {
             let startup_settings = std::fs::read(data.join("startup.json"))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<StartupSettings>(&bytes).ok())
-                .unwrap_or(StartupSettings { start_minimized: true });
+        .unwrap_or(StartupSettings { start_minimized: true, connect_timeout_seconds: 10 });
             let hidden = should_start_hidden(&std::env::args().collect::<Vec<_>>(), startup_settings.start_minimized);
             app.manage(StartupVisibility(hidden));
             let session = data.join("aria2.session");
@@ -473,7 +497,7 @@ pub fn run() {
                 let listener = TcpListener::bind(("127.0.0.1", 0))?;
                 let port = listener.local_addr()?.port();
                 drop(listener);
-                let args = aria2_args(port, &secret, &s, &dir);
+                let args = aria2_args(port, &secret, &s, &dir, startup_settings.connect_timeout_seconds);
                 let (mut rx, child) = match app
                     .shell()
                     .sidecar("aria2c")
@@ -492,6 +516,7 @@ pub fn run() {
                 let monitor_session = s.clone();
                 let monitor_dir = dir.clone();
                 let monitor_secret = secret.clone();
+                let monitor_connect_timeout = startup_settings.connect_timeout_seconds;
                 tauri::async_runtime::spawn(async move {
                     let mut ready_tx = Some(ready_tx);
                     let mut listening = false;
@@ -542,7 +567,7 @@ pub fn run() {
                         for delay in [1u64, 2, 4] {
                             tokio::time::sleep(Duration::from_secs(delay)).await;
                             if monitor_shutdown.load(Ordering::SeqCst) { break; }
-                            let args = aria2_args(port, &monitor_secret, &monitor_session, &monitor_dir);
+                            let args = aria2_args(port, &monitor_secret, &monitor_session, &monitor_dir, monitor_connect_timeout);
                             let Ok((mut replacement_rx, replacement_child)) = monitor_app.shell()
                                 .sidecar("aria2c")
                                 .and_then(|command| command.args(args).spawn()) else { continue; };

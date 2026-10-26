@@ -20,6 +20,7 @@ export default function Sidebar() {
   const view = useStore((s) => s.view);
   const ready = useStore((s) => s.ready);
   const theme = useStore((s) => s.settings.theme);
+  const reduceMotion = useStore((s) => s.settings.reduceMotion);
   const updateSettings = useStore((s) => s.updateSettings);
   const setFilter = useStore((s) => s.setFilter);
   const counts = [
@@ -46,7 +47,7 @@ export default function Sidebar() {
     };
     if (
       !previous ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      reduceMotion
     ) {
       return;
     }
@@ -72,11 +73,15 @@ export default function Sidebar() {
     return () => {
       tween.revert();
     };
-  }, [seedingCount, completedCount]);
+  }, [seedingCount, completedCount, reduceMotion]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => setDark(theme === "system" ? media.matches : theme === "dark");
+    const apply = () => {
+      const isDark = theme === "system" ? media.matches : theme === "dark";
+      setDark(isDark);
+      document.documentElement.dataset.theme = isDark ? "dark" : "light";
+    };
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);

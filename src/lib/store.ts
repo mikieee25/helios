@@ -12,6 +12,7 @@ import type { HistoryEntry } from "./history";
 import { dominantCategory, fileCategory, type FileCategory } from "./format";
 import { readValue, writeValue } from "./persistence";
 import { selectionTotals, type TorrentFile } from "./torrent-files";
+import { redactDiagnostics } from "./diagnostics";
 
 export type UiState = "dl" | "seed" | "pa" | "done" | "err";
 export type Filter = "all" | "dl" | "seed" | "done";
@@ -103,6 +104,43 @@ export const DEFAULT_SETTINGS: Settings = {
   connectTimeoutSeconds: 10,
   customUserAgent: "",
 };
+
+export function clampSettings(settings: Settings): Settings {
+  return {
+    ...settings,
+    proxyMode: settings.proxyMode === "manual" ? "manual" : "none",
+    fileConflict: ["rename", "overwrite", "error"].includes(settings.fileConflict) ? settings.fileConflict : DEFAULT_SETTINGS.fileConflict,
+    diskAllocation: ["none", "prealloc", "falloc"].includes(settings.diskAllocation) ? settings.diskAllocation : DEFAULT_SETTINGS.diskAllocation,
+    theme: ["system", "dark", "light"].includes(settings.theme) ? settings.theme : DEFAULT_SETTINGS.theme,
+    maxDownloadMB: clamp(settings.maxDownloadMB, 0, 100000),
+    maxUploadMB: clamp(settings.maxUploadMB, 0, 100000),
+    maxConcurrent: Math.round(clamp(settings.maxConcurrent, 1, 20)),
+    connectionsPerServer: Math.round(clamp(settings.connectionsPerServer, 1, 16)),
+    seedRatio: clamp(settings.seedRatio, 0, 1000),
+    seedTimeHours: settings.seedTimeHours === "" ? "" : clamp(settings.seedTimeHours, 0, 8760),
+    connectTimeoutSeconds: Math.round(clamp(settings.connectTimeoutSeconds, 1, 60)),
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+}
+
+export function numberPlaceholder(value: number | "", zeroText: string) {
+  return value === 0 || value === "" ? zeroText : undefined;
+}
+
+export function numberFieldState(value: number | "", zeroText: string) {
+  return { value: value === 0 ? "" : value, placeholder: numberPlaceholder(value, zeroText) };
+}
+
+const recentDiagnosticErrors: string[] = [];
+const notifiedFailures = new Set<string>();
+export function getRecentDiagnosticErrors() { return [...recentDiagnosticErrors]; }
+function recordDiagnosticError(error: unknown) {
+  recentDiagnosticErrors.push(redactDiagnostics(error instanceof Error ? error.message : String(error)));
+  if (recentDiagnosticErrors.length > 20) recentDiagnosticErrors.shift();
+}
 export const N = 48;
 export const ARIA2_URL =
   process.env.NEXT_PUBLIC_ARIA2_URL ?? "ws://127.0.0.1:6800/jsonrpc";
@@ -130,6 +168,7 @@ export const clock = { t: 0 };
 
 interface S {
   online: boolean;
+  ariaVersion: string;
   connectedOnce: boolean;
   ready: boolean;
   rpcUrl: string;
@@ -182,6 +221,11 @@ interface S {
 }
 
 let api: Aria2 | undefined;
+export async function getAria2Version(): Promise<string> {
+  if (!api) return "unavailable";
+  try { return (await api.call<{ version?: string }>("getVersion")).version ?? "unknown"; }
+  catch { return "unavailable"; }
+}
 let rpcSecret = BROWSER_SECRET;
 let starting: Promise<void> | undefined;
 let busy = false;
@@ -310,6 +354,8 @@ export function optionsFor(settings: Settings, defaultDir?: string) {
     split: String(settings.connectionsPerServer),
     "async-dns": String(!settings.fasterDnsFallback),
     "file-allocation": settings.diskAllocation,
+    "connect-timeout": String(settings.connectTimeoutSeconds),
+    "user-agent": settings.customUserAgent,
     "all-proxy":
       settings.proxyMode === "manual" ? settings.proxyUrl.trim() : "",
     "all-proxy-user": settings.proxyMode === "manual" ? settings.proxyUser : "",
@@ -353,6 +399,7 @@ export const useStore = create<S>((set, get) => {
       set({ settingsError: undefined });
     } catch {
       set({ settingsError: "aria2 could not apply these settings." });
+      recordDiagnosticError("aria2 could not apply preferences");
     }
   }
 
@@ -422,6 +469,14 @@ export const useStore = create<S>((set, get) => {
         );
       }
       const tasks = [...taskByGid.values()];
+      for (const task of tasks) {
+        if (task.state !== "err" || old.get(task.gid)?.state === "err" || notifiedFailures.has(task.gid)) continue;
+        notifiedFailures.add(task.gid);
+        if (!get().notify || !get().settings.notifyFailed) continue;
+        const body = `Failed: ${task.name}`;
+        if (inTauri()) void isPermissionGranted().then((granted) => { if (granted) sendNotification({ title: "Helios", body }); }).catch(recordDiagnosticError);
+        else if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(body);
+      }
       const g = r[statIndex][0];
       const { dlHist, upHist } = get();
       clock.t = performance.now();
@@ -434,7 +489,7 @@ export const useStore = create<S>((set, get) => {
       });
       flushCompletions(tasks);
     } catch {
-      /* RPC can close while reconnecting. */
+      if (!shutdownRequested) recordDiagnosticError("Download engine RPC request failed");
     } finally {
       busy = false;
     }
@@ -456,6 +511,7 @@ export const useStore = create<S>((set, get) => {
             });
         })
         .catch((error) => {
+          recordDiagnosticError("Could not save completed download; it will be retried");
           console.error(
             `Could not save completed download ${gid}; it will be retried.`,
             error
@@ -490,6 +546,7 @@ export const useStore = create<S>((set, get) => {
           new Notification(task.name);
       }
     } catch (error) {
+      recordDiagnosticError("Could not show completion notification");
       console.error("Could not show completion notification.", error);
     }
   }
@@ -497,10 +554,10 @@ export const useStore = create<S>((set, get) => {
   async function initialize() {
     const [history, settings, legacyChooseFiles] = await Promise.all([
       historyStore.load(),
-      readValue<Settings>("settings", DEFAULT_SETTINGS),
+      readValue<Partial<Settings>>("settings", {}),
       readValue<boolean>("chooseFilesBeforeStarting", false),
     ]);
-    const loadedSettings = {
+    const loadedSettings = clampSettings({
       ...DEFAULT_SETTINGS,
       ...settings,
       chooseFilesBeforeStarting:
@@ -509,7 +566,7 @@ export const useStore = create<S>((set, get) => {
         settings.reduceMotion ??
         (typeof window !== "undefined" &&
           window.matchMedia("(prefers-reduced-motion: reduce)").matches),
-    };
+    });
     set({
       history,
       settings: loadedSettings,
@@ -558,8 +615,10 @@ export const useStore = create<S>((set, get) => {
       },
       (online) => {
         set({ online, ...(online ? { connectedOnce: true } : {}) });
-        if (online && !shutdownRequested)
+        if (online && !shutdownRequested) {
+          void api?.call<{ version?: string }>("getVersion").then((version) => set({ ariaVersion: version.version ?? "unknown" })).catch(() => {});
           void applySettings().then(() => refresh());
+        }
       }
     );
     if (shutdownRequested) {
@@ -574,6 +633,7 @@ export const useStore = create<S>((set, get) => {
 
   return {
     online: false,
+    ariaVersion: "",
     connectedOnce: false,
     ready: false,
     rpcUrl: "",
@@ -632,18 +692,21 @@ export const useStore = create<S>((set, get) => {
           Notification.permission === "granted"
         ) new Notification(body);
       } catch (error) {
+        recordDiagnosticError("Could not show download notification");
         console.error("Could not show download notification.", error);
       }
     },
     async updateSettings(update) {
-      const settings = { ...get().settings, ...update };
-      if ("startMinimized" in update && inTauri()) {
+      const settings = clampSettings({ ...get().settings, ...update });
+      if (("startMinimized" in update || "connectTimeoutSeconds" in update) && inTauri()) {
         try {
           await invoke("write_startup_settings", {
             startMinimized: settings.startMinimized,
+            connectTimeoutSeconds: settings.connectTimeoutSeconds,
           });
         } catch {
           set({ settingsError: "Could not save startup preferences." });
+          recordDiagnosticError("Could not save startup preferences");
           return;
         }
       }
@@ -654,11 +717,18 @@ export const useStore = create<S>((set, get) => {
           });
         } catch {
           set({ settingsError: "The browser bridge could not be updated." });
+          recordDiagnosticError("The browser bridge could not be updated");
           return;
         }
       }
-      set({ settings });
-      await writeValue("settings", settings);
+      try {
+        await writeValue("settings", settings);
+      } catch {
+        set({ settingsError: "Could not save preferences." });
+        recordDiagnosticError("Could not save preferences");
+        return;
+      }
+      set({ settings, settingsError: undefined });
       if (get().online) await applySettings(settings);
     },
     async updateAutostart(enabled) {
@@ -734,6 +804,7 @@ export const useStore = create<S>((set, get) => {
         await api.call("pauseAll");
         void refresh(true);
       } catch (error) {
+        recordDiagnosticError("Could not pause all downloads");
         console.error("Could not pause all downloads.", error);
       }
     },
@@ -743,6 +814,7 @@ export const useStore = create<S>((set, get) => {
         await api.call("unpauseAll");
         void refresh(true);
       } catch (error) {
+        recordDiagnosticError("Could not resume all downloads");
         console.error("Could not resume all downloads.", error);
       }
     },

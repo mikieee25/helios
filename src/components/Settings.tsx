@@ -2,16 +2,19 @@
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import appPackage from "../../package.json";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DEFAULT_SETTINGS, useStore, validateProxy, type Settings as SettingsType } from "@/lib/store";
+import { DEFAULT_SETTINGS, getAria2Version, getRecentDiagnosticErrors, numberFieldState, useStore, validateProxy, type Settings as SettingsType } from "@/lib/store";
 import { Button, NumberField, SelectField, SettingRow, SettingsSection, TextField, Toggle } from "@/components/settings/ui";
+import { redactDiagnostics } from "@/lib/diagnostics";
 
 type BridgeState = { enabled: boolean; port: number; paired: boolean; pairingCode: string | null; pairingExpiresAt: number | null };
 type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: number | null };
 type Section = "Downloads" | "Files" | "Network" | "Seeding" | "Notifications" | "Browser integration" | "Behavior" | "Appearance" | "App" | "Advanced";
 
-function Choice({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: [string, string][] }) {
-  return <SelectField value={value} onChange={(event) => onChange(event.target.value)}>{options.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</SelectField>;
+function Choice({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: [string, string][] }) {
+  return <SelectField aria-label={label} value={value} onChange={(event) => onChange(event.target.value)}>{options.map(([key, optionLabel]) => <option key={key} value={key}>{optionLabel}</option>)}</SelectField>;
 }
 
 function BrowserIntegration({ enabled, save, saved }: { enabled: boolean; save: (patch: Partial<SettingsType>) => void; saved: boolean }) {
@@ -37,11 +40,14 @@ function BrowserIntegration({ enabled, save, saved }: { enabled: boolean; save: 
         if (clientIds.current && next.some((client) => !clientIds.current?.has(client.id))) {
           clientIds.current = undefined; await invoke("bridge_cancel_pairing");
           setBridge((current) => current ? { ...current, pairingCode: null, pairingExpiresAt: null, paired: true } : current);
+        } else if (bridge.pairingExpiresAt && Date.now() / 1000 >= bridge.pairingExpiresAt) {
+          clientIds.current = undefined; await invoke("bridge_cancel_pairing");
+          setBridge((current) => current ? { ...current, pairingCode: null, pairingExpiresAt: null } : current);
         }
       }).catch(() => setError("Could not check paired browsers."));
     }, 3000);
     return () => window.clearInterval(id);
-  }, [bridge?.pairingCode]);
+  }, [bridge?.pairingCode, bridge?.pairingExpiresAt]);
   const startPairing = async () => { try { clientIds.current = new Set(clients.map(({ id }) => id)); setBridge(await invoke<BridgeState>("bridge_start_pairing")); setError(""); } catch { setError("Could not start pairing."); } };
   const cancelPairing = async () => { try { await invoke("bridge_cancel_pairing"); clientIds.current = undefined; setBridge((current) => current ? { ...current, pairingCode: null, pairingExpiresAt: null } : current); } catch { setError("Could not cancel pairing."); } };
   const remaining = Math.max(0, Math.ceil((bridge?.pairingExpiresAt ?? 0) - now / 1000));
@@ -51,14 +57,14 @@ function BrowserIntegration({ enabled, save, saved }: { enabled: boolean; save: 
     {bridge?.pairingCode && <div className="pref-pairing-row"><code>{bridge.pairingCode}</code><span>Expires in {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}</span><Button variant="ghost" onClick={() => void cancelPairing()}>Cancel</Button></div>}
     {clients.map((client) => <SettingRow key={client.id} label={client.label} description={client.lastUsed ? `Last used ${new Date(client.lastUsed * 1000).toLocaleString()}` : "Never used"} control={<Button variant="danger-ghost" onClick={() => void invoke("bridge_revoke_client", { id: client.id }).then(refresh).catch(() => setError("Could not revoke browser."))}>Revoke</Button>} />)}
     {!clients.length && <SettingRow label="No paired browsers" />}
-    <SettingRow label="Last hand-off" description={timings.length ? `${timings[timings.length - 1]} ms` : "—"} />
+    <SettingRow label="Last hand-off" control={<span className="pref-metric">{timings.length ? `${timings[timings.length - 1]} ms` : "—"}</span>} />
     {error && <div className="pref-panel-error" role="alert">{error}</div>}
   </SettingsSection>;
 }
 
 export default function Settings() {
   const settings = useStore((state) => state.settings);
-  const error = useStore((state) => state.settingsError);
+  const ariaVersion = useStore((state) => state.ariaVersion);
   const update = useStore((state) => state.updateSettings);
   const updateAutostart = useStore((state) => state.updateAutostart);
   const notifications = useStore((state) => state.notify);
@@ -67,9 +73,16 @@ export default function Settings() {
   const [proxy, setProxy] = useState({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy });
   const [proxyError, setProxyError] = useState("");
   const [resetAll, setResetAll] = useState(false);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [appVersion, setAppVersion] = useState(appPackage.version);
   const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  const save = (section: Section, patch: Partial<SettingsType>) => {
-    void update(patch); setSavedSection(section); window.setTimeout(() => setSavedSection((value) => value === section ? undefined : value), 1500);
+  const save = async (section: Section, patch: Partial<SettingsType>) => {
+    await update(patch);
+    const key = Object.keys(patch)[0];
+    const issue = useStore.getState().settingsError;
+    if (issue) { setRowErrors((errors) => ({ ...errors, [key]: issue })); return; }
+    setRowErrors((errors) => { const next = { ...errors }; delete next[key]; return next; });
+    setSavedSection(section); window.setTimeout(() => setSavedSection((value) => value === section ? undefined : value), 1500);
   };
   useEffect(() => setProxy({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy }), [settings.proxyMode, settings.proxyUrl, settings.proxyUser, settings.proxyPassword, settings.noProxy]);
   useEffect(() => {
@@ -83,65 +96,85 @@ export default function Settings() {
     const invalid = next.proxyMode === "manual" ? validateProxy(next.proxyUrl) : undefined;
     setProxyError(invalid ?? ""); if (!invalid) save("Network", next);
   };
-  const reset = (section: Section, keys: (keyof SettingsType)[]) => save(section, Object.fromEntries(keys.map((key) => [key, DEFAULT_SETTINGS[key]])) as Partial<SettingsType>);
-  const num = (section: Section, label: string, key: "maxDownloadMB" | "maxUploadMB" | "maxConcurrent" | "connectionsPerServer" | "seedRatio" | "seedTimeHours" | "connectTimeoutSeconds", placeholder: string, unit?: string, disabled = false) => <SettingRow label={label} control={<NumberField aria-label={label} min="0" step={key === "seedRatio" || key === "seedTimeHours" || key === "maxDownloadMB" || key === "maxUploadMB" ? "0.1" : "1"} value={settings[key]} placeholder={settings[key] === 0 || settings[key] === "" ? placeholder : undefined} unit={unit} disabled={disabled} onChange={(raw) => save(section, { [key]: raw === "" && key === "seedTimeHours" ? "" : Math.max(0, Number(raw)) } as Partial<SettingsType>)} />} />;
+  const reset = (section: Section, keys: (keyof SettingsType)[]) => save(section, Object.fromEntries(keys.map((key) => [key, key === "reduceMotion" ? matchMedia("(prefers-reduced-motion: reduce)").matches : DEFAULT_SETTINGS[key]])) as Partial<SettingsType>);
+  const resetApp = async () => { await updateAutostart(false); const issue = useStore.getState().settingsError; if (issue) { setRowErrors((errors) => ({ ...errors, startWithWindows: issue })); return; } await reset("App", ["startWithWindows", "startMinimized", "closeToTray"]); };
+  const setAutostartPreference = async (enabled: boolean) => {
+    await updateAutostart(enabled);
+    const issue = useStore.getState().settingsError;
+    if (issue) { setRowErrors((errors) => ({ ...errors, startWithWindows: issue })); return; }
+    await save("App", { startWithWindows: enabled });
+  };
+  const num = (section: Section, label: string, key: "maxDownloadMB" | "maxUploadMB" | "maxConcurrent" | "connectionsPerServer" | "seedRatio" | "seedTimeHours" | "connectTimeoutSeconds", placeholder: string, unit?: string, disabled = false) => { const field = numberFieldState(settings[key], placeholder); const max = ({ maxConcurrent: 20, connectionsPerServer: 16, seedRatio: 1000, seedTimeHours: 8760, connectTimeoutSeconds: 60 } as Partial<Record<typeof key, number>>)[key]; return <SettingRow label={label} error={rowErrors[key]} control={<NumberField aria-label={label} min={key === "connectTimeoutSeconds" ? "1" : "0"} max={max} step={key === "seedRatio" || key === "seedTimeHours" || key === "maxDownloadMB" || key === "maxUploadMB" ? "0.1" : "1"} value={field.value} placeholder={field.placeholder} unit={unit} disabled={disabled} onChange={(raw) => void save(section, { [key]: raw === "" && key === "seedTimeHours" ? "" : Math.max(0, Number(raw)) } as Partial<SettingsType>)} />} />; };
   const sectionSaved = (section: Section) => savedSection === section;
   const defaultDownloads = { maxDownloadMB: DEFAULT_SETTINGS.maxDownloadMB, maxUploadMB: DEFAULT_SETTINGS.maxUploadMB, maxConcurrent: DEFAULT_SETTINGS.maxConcurrent, connectionsPerServer: DEFAULT_SETTINGS.connectionsPerServer, downloadDir: DEFAULT_SETTINGS.downloadDir };
+  const copyDiagnostics = async () => {
+    try {
+      const currentAppVersion = inTauri ? await getVersion() : appVersion;
+      setAppVersion(currentAppVersion);
+      const [ariaVersion, bridge, timings, osVersion] = inTauri ? await Promise.all([
+        getAria2Version(), invoke<BridgeState>("bridge_get_state").catch(() => undefined), invoke<number[]>("bridge_get_timings").catch(() => [] as number[]), invoke<string>("get_os_version").catch(() => navigator.userAgent),
+      ]) : ["unavailable", undefined, [] as number[], navigator.userAgent];
+      const { proxyUrl: _proxyUrl, proxyUser: _proxyUser, proxyPassword: _proxyPassword, ...safeSettings } = settings;
+      const report = redactDiagnostics(JSON.stringify({ helios: currentAppVersion, aria2: ariaVersion, os: osVersion, bridgePort: bridge?.port ?? null, handoffTimingsMs: timings, settings: safeSettings, recentErrors: getRecentDiagnosticErrors() }, null, 2));
+      await navigator.clipboard.writeText(report);
+      setSavedSection("Advanced"); window.setTimeout(() => setSavedSection((value) => value === "Advanced" ? undefined : value), 1500);
+    } catch { setRowErrors((current) => ({ ...current, diagnostics: "Could not copy diagnostics." })); }
+  };
+  useEffect(() => { if (inTauri) void getVersion().then(setAppVersion).catch(() => {}); }, [inTauri]);
 
   return <section className="settings-view">
     <header className="pref-page-head"><div><div className="lbl">Settings</div><h1>Preferences</h1></div><Button variant="secondary" onClick={() => useStore.getState().setView("tasks")}>Back</Button></header>
     <SettingsSection title="Downloads" saved={sectionSaved("Downloads")} reset={() => reset("Downloads", Object.keys(defaultDownloads) as (keyof SettingsType)[])}>
       {num("Downloads", "Download speed limit", "maxDownloadMB", "Unlimited", "MB/s")}{num("Downloads", "Upload speed limit", "maxUploadMB", "Unlimited", "MB/s")}{num("Downloads", "Simultaneous downloads", "maxConcurrent", "5")}{num("Downloads", "Connections per server", "connectionsPerServer", "16")}
-      {inTauri && <SettingRow label="Download folder" control={<div className="pref-folder"><span title={settings.downloadDir || "Default Downloads folder"}>{settings.downloadDir || "Default"}</span>{settings.downloadDir && <Button variant="ghost" onClick={() => save("Downloads", { downloadDir: "" })}>Default</Button>}<Button variant="accent" onClick={() => void chooseFolder()}>Choose</Button></div>} />}
+      {inTauri && <SettingRow label="Download folder" error={rowErrors.downloadDir} control={<div className="pref-folder"><span title={settings.downloadDir || "Default Downloads folder"}>{settings.downloadDir || "Default"}</span>{settings.downloadDir && <Button variant="ghost" onClick={() => void save("Downloads", { downloadDir: "" })}>Default</Button>}<Button variant="accent" onClick={() => void chooseFolder()}>Choose</Button></div>} />}
     </SettingsSection>
     <SettingsSection title="Files" badge="New downloads" saved={sectionSaved("Files")} reset={() => reset("Files", ["fileConflict"])}>
-      <SettingRow label="If a file exists" description={settings.fileConflict === "overwrite" ? <span className="pref-error">Replaces the old file</span> : undefined} control={<Choice value={settings.fileConflict} onChange={(value) => save("Files", { fileConflict: value as SettingsType["fileConflict"] })} options={[["rename", "Rename"], ["overwrite", "Overwrite"], ["error", "Show error"]]} />} />
+      <SettingRow label="If a file exists" error={rowErrors.fileConflict} description={settings.fileConflict === "overwrite" ? <span className="pref-error">Replaces the old file</span> : undefined} control={<Choice label="If a file exists" value={settings.fileConflict} onChange={(value) => void save("Files", { fileConflict: value as SettingsType["fileConflict"] })} options={[["rename", "Rename"], ["overwrite", "Overwrite"], ["error", "Show error"]]} />} />
     </SettingsSection>
     <SettingsSection title="Network" badge="New downloads" saved={sectionSaved("Network")} reset={() => { setProxy({ proxyMode: DEFAULT_SETTINGS.proxyMode, proxyUrl: "", proxyUser: "", proxyPassword: "", noProxy: "" }); setProxyError(""); reset("Network", ["proxyMode", "proxyUrl", "proxyUser", "proxyPassword", "noProxy"]); }}>
-      <SettingRow label="Proxy" control={<Choice value={proxy.proxyMode} onChange={(value) => proxyPatch({ proxyMode: value as typeof proxy.proxyMode })} options={[["none", "None"], ["manual", "Manual"]]} />} />
+      <SettingRow label="Proxy" error={rowErrors.proxyMode} control={<Choice label="Proxy" value={proxy.proxyMode} onChange={(value) => proxyPatch({ proxyMode: value as typeof proxy.proxyMode })} options={[["none", "None"], ["manual", "Manual"]]} />} />
       {proxy.proxyMode === "manual" && <div className="pref-subrows">
-        <SettingRow label="Address" error={proxyError} control={<TextField aria-label="Proxy address" value={proxy.proxyUrl} placeholder="host:3128" onChange={(event) => proxyPatch({ proxyUrl: event.target.value })} />} />
-        <SettingRow label="Username" control={<TextField aria-label="Proxy username" value={proxy.proxyUser} onChange={(event) => proxyPatch({ proxyUser: event.target.value })} />} />
-        <SettingRow label="Password" control={<TextField aria-label="Proxy password" type="password" value={proxy.proxyPassword} onChange={(event) => proxyPatch({ proxyPassword: event.target.value })} />} />
-        <SettingRow label="Bypass list" control={<TextField aria-label="Bypass list" value={proxy.noProxy} onChange={(event) => proxyPatch({ noProxy: event.target.value })} />} />
+        <SettingRow label="Address" error={proxyError || rowErrors.proxyUrl} control={<TextField aria-label="Proxy address" value={proxy.proxyUrl} placeholder="host:3128" onChange={(event) => proxyPatch({ proxyUrl: event.target.value })} />} />
+        <SettingRow label="Username" error={rowErrors.proxyUser} control={<TextField aria-label="Proxy username" value={proxy.proxyUser} onChange={(event) => proxyPatch({ proxyUser: event.target.value })} />} />
+        <SettingRow label="Password" error={rowErrors.proxyPassword} control={<TextField aria-label="Proxy password" type="password" value={proxy.proxyPassword} onChange={(event) => proxyPatch({ proxyPassword: event.target.value })} />} />
+        <SettingRow label="Bypass list" error={rowErrors.noProxy} control={<TextField aria-label="Bypass list" value={proxy.noProxy} onChange={(event) => proxyPatch({ noProxy: event.target.value })} />} />
       </div>}
     </SettingsSection>
     <SettingsSection title="Seeding" badge="New downloads" saved={sectionSaved("Seeding")} reset={() => reset("Seeding", ["seedRatio", "seedTimeHours", "neverSeed"])}>
       {num("Seeding", "Stop at ratio", "seedRatio", "No limit", undefined, settings.neverSeed)}{num("Seeding", "Stop after", "seedTimeHours", "No limit", "hours", settings.neverSeed)}
-      <SettingRow label="Never seed" control={<Toggle label="Never seed" checked={settings.neverSeed} onChange={(value) => save("Seeding", { neverSeed: value })} />} />
+      <SettingRow label="Never seed" error={rowErrors.neverSeed} control={<Toggle label="Never seed" checked={settings.neverSeed} onChange={(value) => void save("Seeding", { neverSeed: value })} />} />
       {settings.seedRatio === 0 && settings.seedTimeHours === "" && !settings.neverSeed && <div className="pref-row"><div className="pref-label"><small className="pref-error">Seeds forever</small></div></div>}
     </SettingsSection>
-    <SettingsSection title="Notifications" saved={sectionSaved("Notifications")}>
+    <SettingsSection title="Notifications" saved={sectionSaved("Notifications")} reset={() => reset("Notifications", ["notifyFinished", "notifyFailed", "notifyBrowserAdds"])}>
       {([["notifyFinished", "Download finished"], ["notifyFailed", "Download failed"], ["notifyBrowserAdds", "Browser adds a download"]] as const).map(([key, label]) => <SettingRow key={key} label={label} disabled={!notifications} control={<Toggle label={label} checked={settings[key]} disabled={!notifications} onChange={(value) => save("Notifications", { [key]: value })} />} />)}
     </SettingsSection>
     {inTauri && <BrowserIntegration enabled={settings.bridgeEnabled} save={(patch) => save("Browser integration", patch)} saved={sectionSaved("Browser integration")} />}
     <SettingsSection title="Behavior" saved={sectionSaved("Behavior")} reset={() => reset("Behavior", ["confirmBeforeRemoving", "deleteFilesWhenRemoving", "chooseFilesBeforeStarting"])}>
-      <SettingRow label="Confirm before removing" control={<Toggle label="Confirm before removing" checked={settings.confirmBeforeRemoving} onChange={(value) => save("Behavior", { confirmBeforeRemoving: value })} />} />
-      <SettingRow label="Delete files when removing" control={<Toggle label="Delete files when removing" checked={settings.deleteFilesWhenRemoving} onChange={(value) => save("Behavior", { deleteFilesWhenRemoving: value })} />} />
-      <SettingRow label="Choose torrent files before starting" control={<Toggle label="Choose torrent files before starting" checked={settings.chooseFilesBeforeStarting} onChange={(value) => { save("Behavior", { chooseFilesBeforeStarting: value }); }} />} />
+      <SettingRow label="Confirm before removing" error={rowErrors.confirmBeforeRemoving} control={<Toggle label="Confirm before removing" checked={settings.confirmBeforeRemoving} onChange={(value) => void save("Behavior", { confirmBeforeRemoving: value })} />} />
+      <SettingRow label="Delete files when removing" error={rowErrors.deleteFilesWhenRemoving} control={<Toggle label="Delete files when removing" checked={settings.deleteFilesWhenRemoving} onChange={(value) => void save("Behavior", { deleteFilesWhenRemoving: value })} />} />
+      <SettingRow label="Choose torrent files before starting" error={rowErrors.chooseFilesBeforeStarting} control={<Toggle label="Choose torrent files before starting" checked={settings.chooseFilesBeforeStarting} onChange={(value) => void save("Behavior", { chooseFilesBeforeStarting: value })} />} />
     </SettingsSection>
     <SettingsSection title="Appearance" saved={sectionSaved("Appearance")} reset={() => reset("Appearance", ["theme", "compactList", "reduceMotion"])}>
-      <SettingRow label="Theme" control={<Choice value={settings.theme} onChange={(value) => save("Appearance", { theme: value as SettingsType["theme"] })} options={[["system", "System"], ["dark", "Dark"], ["light", "Light"]]} />} />
-      <SettingRow label="Compact list" control={<Toggle label="Compact list" checked={settings.compactList} onChange={(value) => save("Appearance", { compactList: value })} />} />
-      <SettingRow label="Reduce motion" control={<Toggle label="Reduce motion" checked={settings.reduceMotion} onChange={(value) => save("Appearance", { reduceMotion: value })} />} />
+      <SettingRow label="Theme" error={rowErrors.theme} control={<Choice label="Theme" value={settings.theme} onChange={(value) => void save("Appearance", { theme: value as SettingsType["theme"] })} options={[["system", "System"], ["dark", "Dark"], ["light", "Light"]]} />} />
+      <SettingRow label="Compact list" error={rowErrors.compactList} control={<Toggle label="Compact list" checked={settings.compactList} onChange={(value) => void save("Appearance", { compactList: value })} />} />
+      <SettingRow label="Reduce motion" error={rowErrors.reduceMotion} control={<Toggle label="Reduce motion" checked={settings.reduceMotion} onChange={(value) => void save("Appearance", { reduceMotion: value })} />} />
     </SettingsSection>
-    {inTauri && <SettingsSection title="App" saved={sectionSaved("App")} reset={() => reset("App", ["startWithWindows", "startMinimized", "closeToTray"])}>
-      <SettingRow label="Start with Windows" control={<Toggle label="Start with Windows" checked={settings.startWithWindows} onChange={(value) => { void updateAutostart(value); save("App", { startWithWindows: value }); }} />} />
+    {inTauri && <SettingsSection title="App" saved={sectionSaved("App")} reset={() => void resetApp()}>
+      <SettingRow label="Start with Windows" error={rowErrors.startWithWindows} control={<Toggle label="Start with Windows" checked={settings.startWithWindows} onChange={(value) => void setAutostartPreference(value)} />} />
       {settings.startWithWindows && <div className="pref-subrows"><SettingRow label="Start minimized to tray" control={<Toggle label="Start minimized to tray" checked={settings.startMinimized} onChange={(value) => save("App", { startMinimized: value })} />} /></div>}
-      <SettingRow label="Close button hides to tray" control={<Toggle label="Close button hides to tray" checked={settings.closeToTray} onChange={(value) => save("App", { closeToTray: value })} />} />
+      <SettingRow label="Close button hides to tray" error={rowErrors.closeToTray} control={<Toggle label="Close button hides to tray" checked={settings.closeToTray} onChange={(value) => void save("App", { closeToTray: value })} />} />
     </SettingsSection>}
-    <details className="pref-advanced"><summary>Advanced</summary><SettingsSection title="Advanced" saved={sectionSaved("Advanced")} reset={() => reset("Advanced", ["fasterDnsFallback", "diskAllocation"])}>
-      <SettingRow label="Faster DNS fallback" control={<Toggle label="Faster DNS fallback" checked={settings.fasterDnsFallback} onChange={(value) => save("Advanced", { fasterDnsFallback: value })} />} />
-      <SettingRow label="Disk allocation" control={<Choice value={settings.diskAllocation} onChange={(value) => save("Advanced", { diskAllocation: value as SettingsType["diskAllocation"] })} options={[["none", "Off"], ["prealloc", "Reserve space"], ["falloc", "Fast reserve"]]} />} />
+    <details className="pref-advanced"><summary>Advanced</summary><SettingsSection title="Advanced" saved={sectionSaved("Advanced")} reset={() => reset("Advanced", ["fasterDnsFallback", "diskAllocation", "connectTimeoutSeconds", "customUserAgent"])}>
+      <SettingRow label="Faster DNS fallback" error={rowErrors.fasterDnsFallback} control={<Toggle label="Faster DNS fallback" checked={settings.fasterDnsFallback} onChange={(value) => void save("Advanced", { fasterDnsFallback: value })} />} />
+      <SettingRow label="Disk allocation" error={rowErrors.diskAllocation} control={<Choice label="Disk allocation" value={settings.diskAllocation} onChange={(value) => void save("Advanced", { diskAllocation: value as SettingsType["diskAllocation"] })} options={[["none", "Off"], ["prealloc", "Reserve space"], ["falloc", "Fast reserve"]]} />} />
       {num("Advanced", "Connection timeout", "connectTimeoutSeconds", "10", "s")}
-      <SettingRow label="Custom user agent" control={<TextField aria-label="Custom user agent" value={settings.customUserAgent} placeholder="Default" onChange={(event) => save("Advanced", { customUserAgent: event.target.value })} />} />
-      <SettingRow label="Open data folder" control={<Button variant="ghost" disabled>Open</Button>} />
-      <SettingRow label="Copy diagnostics" control={<Button variant="ghost" disabled>Copy</Button>} />
+      <SettingRow label="Custom user agent" error={rowErrors.customUserAgent} control={<TextField aria-label="Custom user agent" value={settings.customUserAgent} placeholder="Default" onChange={(event) => void save("Advanced", { customUserAgent: event.target.value })} />} />
+      <SettingRow label="Open data folder" error={rowErrors.openDataFolder} control={<Button variant="ghost" onClick={() => void invoke("open_data_folder").catch(() => setRowErrors((current) => ({ ...current, openDataFolder: "Could not open the data folder." })))}>Open</Button>} />
+      <SettingRow label="Copy diagnostics" error={rowErrors.diagnostics} control={<Button variant="ghost" onClick={() => void copyDiagnostics()}>Copy</Button>} />
       <SettingRow label="Reset all settings" control={<Button variant="danger-ghost" onClick={() => setResetAll(true)}>Reset</Button>} />
     </SettingsSection></details>
-    <div className="pref-about">Helios 0.1.2 · aria2 · <button type="button" disabled={!inTauri} onClick={() => void invoke("open_licenses")}>Licenses</button></div>
-    {error && <p className="pref-global-error" role="alert">{error}</p>}
-    {resetAll && <div className="pref-confirm" role="alertdialog" aria-modal="true"><p>Reset all preferences?</p><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); void update(DEFAULT_SETTINGS); }}>Reset all settings</Button></div>}
+    <div className="pref-about">Helios {appVersion} · aria2 {ariaVersion || "—"} · <button type="button" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</button>{rowErrors.licenses && <span role="alert">{rowErrors.licenses}</span>}</div>
+    {resetAll && <div className="pref-confirm"><section role="alertdialog" aria-modal="true" aria-labelledby="reset-all-title"><p id="reset-all-title">Reset all preferences?</p><div><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); setNotifications(false); void (async () => { if (inTauri) await updateAutostart(false); await update({ ...DEFAULT_SETTINGS, reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }); })(); }}>Reset all settings</Button></div></section></div>}
     <span className="sr-only" aria-live="polite">{savedSection ? `${savedSection} saved` : ""}</span>
   </section>;
 }
