@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, useStore, validateProxy, type Settings } from "@/lib/store";
+import { Button, NumberField, SettingRow } from "@/components/settings/ui";
 
 function NumberSetting({
   label,
@@ -29,21 +30,19 @@ function NumberSetting({
     if (document.activeElement !== inputRef.current) setDraft(String(value));
   }, [value]);
   return (
-    <label className="setting-field">
-      <span className="setting-label">
-        <b>{label}</b>
-        {description && <small>{description}</small>}
-      </span>
+    <SettingRow label={label} description={description} control={
       <span className="setting-input">
-        <input
+        <NumberField
           ref={inputRef}
-          type="text"
+          min={min}
+          max={max}
+          step={step}
           inputMode={step < 1 ? "decimal" : "numeric"}
           value={draft}
           onBlur={() => setDraft(String(value))}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            const next = Number(e.target.value);
+          onChange={(raw) => {
+            setDraft(raw);
+            const next = Number(raw);
             if (
               Number.isFinite(next) &&
               next >= min &&
@@ -54,7 +53,7 @@ function NumberSetting({
         />
         {unit && <small>{unit}</small>}
       </span>
-    </label>
+    } />
   );
 }
 
@@ -368,9 +367,9 @@ export default function Settings() {
           <div className="lbl">Settings</div>
           <h1>Preferences</h1>
         </div>
-        <button onClick={() => useStore.getState().setView("tasks")}>
+        <Button variant="secondary" onClick={() => useStore.getState().setView("tasks")}>
           Back
-        </button>
+        </Button>
       </div>
       <section className="settings-section" aria-labelledby="downloads-settings-title">
         <SectionHeading
