@@ -61,6 +61,14 @@ export default function Page() {
   }, []);
   useEffect(() => {
     void useStore.getState().start();
+    let paintFrame = 0;
+    if ("__TAURI_INTERNALS__" in window) {
+      paintFrame = requestAnimationFrame(() => {
+        void invoke("show_after_first_paint").catch((error) =>
+          console.error("Could not show the startup window.", error)
+        );
+      });
+    }
     // Paste a link (http, ftp or magnet) anywhere to add a download.
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target;
@@ -159,6 +167,7 @@ export default function Page() {
     window.addEventListener("keydown", onShortcut);
     return () => {
       disposed = true;
+      if (paintFrame) cancelAnimationFrame(paintFrame);
       unlistenClose?.();
       unlistenNative.forEach((unlisten) => unlisten());
       window.removeEventListener("paste", onPaste);

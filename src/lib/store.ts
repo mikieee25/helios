@@ -637,6 +637,16 @@ export const useStore = create<S>((set, get) => {
     },
     async updateSettings(update) {
       const settings = { ...get().settings, ...update };
+      if ("startMinimized" in update && inTauri()) {
+        try {
+          await invoke("write_startup_settings", {
+            startMinimized: settings.startMinimized,
+          });
+        } catch {
+          set({ settingsError: "Could not save startup preferences." });
+          return;
+        }
+      }
       if ("bridgeEnabled" in update && inTauri()) {
         try {
           await invoke("bridge_set_enabled", {

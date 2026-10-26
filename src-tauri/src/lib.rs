@@ -2,6 +2,7 @@ mod bridge;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
+use serde::Deserialize;
 use std::{
     net::TcpListener,
     sync::{
@@ -47,6 +48,34 @@ fn aria2_args(port: u16, secret: &str, session: &str, dir: &str) -> Vec<String> 
         format!("--save-session={session}"),
         "--save-session-interval=30".into(),
     ]
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupSettings {
+    #[serde(default = "default_start_minimized")]
+    start_minimized: bool,
+}
+
+fn default_start_minimized() -> bool { true }
+
+fn should_start_hidden(args: &[String], start_minimized: bool) -> bool {
+    start_minimized && args.iter().any(|arg| arg == "--autostarted")
+}
+
+struct StartupVisibility(bool);
+
+#[tauri::command]
+fn write_startup_settings(app: AppHandle, start_minimized: bool) -> Result<(), String> {
+    let path = app.path().app_data_dir().map_err(|error| error.to_string())?.join("startup.json");
+    std::fs::create_dir_all(path.parent().expect("startup path has parent")).map_err(|error| error.to_string())?;
+    let contents = serde_json::to_vec(&StartupSettings { start_minimized }).map_err(|error| error.to_string())?;
+    std::fs::write(path, contents).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn show_after_first_paint(app: AppHandle, visibility: State<'_, StartupVisibility>) {
+    if !visibility.0 { show_window(&app); }
 }
 
 #[derive(Clone, Serialize)]
@@ -368,7 +397,7 @@ pub fn run() {
             .plugin(tauri_plugin_deep_link::init())
             .plugin(tauri_plugin_autostart::init(
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-                None,
+                Some(vec!["--autostarted"]),
             ));
     let app = builder
         .plugin(tauri_plugin_shell::init())
@@ -390,7 +419,9 @@ pub fn run() {
             open_download_file,
             begin_aria_shutdown,
             take_open_requests,
-            set_autostart
+            set_autostart,
+            write_startup_settings,
+            show_after_first_paint
         ])
         .setup(move |app| {
             app.manage(pending.clone());
@@ -422,6 +453,12 @@ pub fn run() {
             // Keep the download session between launches.
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
+            let startup_settings = std::fs::read(data.join("startup.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<StartupSettings>(&bytes).ok())
+                .unwrap_or(StartupSettings { start_minimized: true });
+            let hidden = should_start_hidden(&std::env::args().collect::<Vec<_>>(), startup_settings.start_minimized);
+            app.manage(StartupVisibility(hidden));
             let session = data.join("aria2.session");
             if !session.exists() {
                 std::fs::File::create(&session)?;
@@ -601,4 +638,16 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::should_start_hidden;
+
+    #[test]
+    fn only_autostart_launch_hides_when_enabled() {
+        assert!(should_start_hidden(&["helios.exe".into(), "--autostarted".into()], true));
+        assert!(!should_start_hidden(&["helios.exe".into()], true));
+        assert!(!should_start_hidden(&["helios.exe".into(), "--autostarted".into()], false));
+    }
 }
