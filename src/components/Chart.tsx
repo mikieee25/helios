@@ -69,7 +69,7 @@ export default function Chart() {
       if (Math.abs(tgt - mix) < 0.002) mix = tgt;
       const v = dlHist.map((x, i) => x * (1 - mix) + upHist[i] * mix),
         M = v.length;
-      ymax += (Math.max(12, ...v) * 1.12 - ymax) * 0.06;
+      ymax += (Math.max(0.25, ...v) * 1.12 - ymax) * 0.06;
       const y = (n: number) => H * 0.88 - (n / ymax) * H * 0.66;
       const p: number[][] = [];
       for (let i = 0; i < M - 1; i++)
