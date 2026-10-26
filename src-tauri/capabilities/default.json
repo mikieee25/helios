@@ -17,6 +17,8 @@
     "opener:allow-reveal-item-in-dir",
     "opener:allow-open-path",
     "window-state:default",
-    "deep-link:default"
+    "deep-link:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

@@ -30,6 +30,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/aria2c"
     ],
@@ -66,6 +67,11 @@
     ]
   },
   "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDExNTk2QjdEODgxOTFBMDQKUldRRUdobUlmV3RaRVozM3U3SUNQNnVHSXRQK2lvaDJBSFZvRFVrSFJ4d04xSW9HeFRQTy8vWE8K",
+      "endpoints": ["https://github.com/mikieee25/helios/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    },
     "deep-link": {
       "desktop": {
         "schemes": [

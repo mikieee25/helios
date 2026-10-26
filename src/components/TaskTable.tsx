@@ -1,6 +1,11 @@
 "use client";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { gsap } from "gsap";
@@ -11,7 +16,23 @@ import { buildOverview, type OverviewRow } from "@/lib/overview";
 import { sz, eta } from "@/lib/format";
 import { Ic } from "./Icon";
 import { layoutVirtualRow } from "./virtual-row-layout";
+import {
+  DEFAULT_TASK_COLUMN_WIDTHS,
+  MIN_TASK_COLUMN_WIDTHS,
+  parseTaskColumnWidths,
+  resizeTaskColumns,
+} from "@/lib/task-columns";
 import SelectFilesDialog from "./SelectFilesDialog";
+
+const COLUMN_WIDTHS_KEY = "helios-task-column-widths-v1";
+const COLUMN_LABELS = ["NAME", "PROGRESS", "SIZE", "TIME LEFT", "SEEDS", "PEERS"];
+type ColumnDrag = {
+  index: number;
+  pointerId: number;
+  startX: number;
+  widths: number[];
+  trackWidths: number[];
+};
 
 type RowProps = {
   t: Task;
@@ -235,7 +256,11 @@ export default function TaskTable() {
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [offlineTimedOut, setOfflineTimedOut] = useState(false);
   const [retryVersion, setRetryVersion] = useState(0);
+  const [columnWidths, setColumnWidths] = useState(DEFAULT_TASK_COLUMN_WIDTHS);
+  const [columnWidthsLoaded, setColumnWidthsLoaded] = useState(false);
   const parentRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const columnDrag = useRef<ColumnDrag | undefined>(undefined);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const positions = useRef(new Map<string, number>());
   const previousKeys = useRef(new Set<string>());
@@ -258,6 +283,76 @@ export default function TaskTable() {
   const view = useStore((s) => s.view);
   const sel = useStore((s) => s.sel ?? s.tasks[0]?.gid);
   const isHistory = filter === "done";
+  useEffect(() => {
+    try {
+      setColumnWidths(
+        parseTaskColumnWidths(localStorage.getItem(COLUMN_WIDTHS_KEY))
+      );
+    } catch {
+      // Keep the default widths when local storage is unavailable.
+    }
+    setColumnWidthsLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (!columnWidthsLoaded) return;
+    try {
+      localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(columnWidths));
+    } catch {
+      // Column resizing still works for this session when storage is unavailable.
+    }
+  }, [columnWidths, columnWidthsLoaded]);
+  const columnStyle = {
+    "--task-columns": columnWidths
+      .map((width, index) => `minmax(${MIN_TASK_COLUMN_WIDTHS[index]}px, ${width}fr)`)
+      .join(" "),
+  } as CSSProperties;
+  const getTrackWidths = (element: HTMLElement) => {
+    const header = element.closest(".row.head");
+    return header ? Array.from(header.children, (cell) => cell.getBoundingClientRect().width) : [];
+  };
+  const startColumnDrag = (index: number, event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const trackWidths = getTrackWidths(event.currentTarget);
+    if (trackWidths.length !== columnWidths.length) return;
+    event.preventDefault();
+    columnDrag.current = {
+      index,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      widths: columnWidths,
+      trackWidths,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveColumnDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = columnDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setColumnWidths(
+      resizeTaskColumns(
+        drag.widths,
+        drag.index,
+        event.clientX - drag.startX,
+        drag.trackWidths
+      )
+    );
+  };
+  const endColumnDrag = () => {
+    columnDrag.current = undefined;
+  };
+  const resizeByKeyboard = (index: number, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const trackWidths = getTrackWidths(event.currentTarget);
+    if (trackWidths.length !== columnWidths.length) return;
+    event.preventDefault();
+    setColumnWidths((widths) =>
+      resizeTaskColumns(
+        widths,
+        index,
+        event.key === "ArrowRight" ? 10 : -10,
+        trackWidths
+      )
+    );
+  };
   useEffect(() => {
     parentRef.current?.scrollTo(0, 0);
     setSelected(new Set());
@@ -595,14 +690,33 @@ export default function TaskTable() {
           </button>
         </div>
       )}
-      <div className="grid">
+      <div className="grid" ref={gridRef} style={columnStyle}>
         <div className="row head">
-          <span>NAME</span>
-          <span>PROGRESS</span>
-          <span>SIZE</span>
-          <span>TIME LEFT</span>
-          <span>SEEDS</span>
-          <span>PEERS</span>
+          {COLUMN_LABELS.map((label, index) => (
+            <span key={label}>
+              {label}
+              {index < COLUMN_LABELS.length - 1 && (
+                <button
+                  type="button"
+                  className="column-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label={`Resize ${label.toLowerCase()} column`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(
+                    (columnWidths[index] / columnWidths.reduce((sum, width) => sum + width, 0)) * 100
+                  )}
+                  title="Drag to resize · use arrow keys"
+                  onPointerDown={(event) => startColumnDrag(index, event)}
+                  onPointerMove={moveColumnDrag}
+                  onPointerUp={endColumnDrag}
+                  onPointerCancel={endColumnDrag}
+                  onKeyDown={(event) => resizeByKeyboard(index, event)}
+                />
+              )}
+            </span>
+          ))}
         </div>
         {hasOfflineTasks && (
           <div className="connection-banner" role="status">

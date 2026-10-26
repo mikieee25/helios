@@ -4,10 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import appPackage from "../../package.json";
+import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, getAria2Version, getRecentDiagnosticErrors, numberFieldState, useStore, validateProxy, type Settings as SettingsType } from "@/lib/store";
 import { Button, NumberField, SelectField, SettingRow, SettingsSection, TextField, Toggle } from "@/components/settings/ui";
 import { redactDiagnostics } from "@/lib/diagnostics";
+import { installUpdate } from "@/lib/updater";
 
 type BridgeState = { enabled: boolean; port: number; paired: boolean; pairingCode: string | null; pairingExpiresAt: number | null };
 type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: number | null };
@@ -75,7 +77,12 @@ export default function Settings() {
   const [resetAll, setResetAll] = useState(false);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [appVersion, setAppVersion] = useState(appPackage.version);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [updateStatus, setUpdateStatus] = useState("");
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<number>();
   const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const updateSupported = inTauri && process.env.NODE_ENV === "production";
   const save = async (section: Section, patch: Partial<SettingsType>) => {
     await update(patch);
     const key = Object.keys(patch)[0];
@@ -85,6 +92,7 @@ export default function Settings() {
     setSavedSection(section); window.setTimeout(() => setSavedSection((value) => value === section ? undefined : value), 1500);
   };
   useEffect(() => setProxy({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy }), [settings.proxyMode, settings.proxyUrl, settings.proxyUser, settings.proxyPassword, settings.noProxy]);
+  useEffect(() => { if (inTauri) void getVersion().then(setAppVersion).catch(() => {}); }, [inTauri]);
   useEffect(() => {
     const theme = settings.theme;
     const apply = () => { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme; };
@@ -106,6 +114,28 @@ export default function Settings() {
   };
   const num = (section: Section, label: string, key: "maxDownloadMB" | "maxUploadMB" | "maxConcurrent" | "connectionsPerServer" | "seedRatio" | "seedTimeHours" | "connectTimeoutSeconds", placeholder: string, unit?: string, disabled = false) => { const field = numberFieldState(settings[key], placeholder); const max = ({ maxConcurrent: 20, connectionsPerServer: 16, seedRatio: 1000, seedTimeHours: 8760, connectTimeoutSeconds: 60 } as Partial<Record<typeof key, number>>)[key]; return <SettingRow label={label} error={rowErrors[key]} control={<NumberField aria-label={label} min={key === "connectTimeoutSeconds" ? "1" : "0"} max={max} step={key === "seedRatio" || key === "seedTimeHours" || key === "maxDownloadMB" || key === "maxUploadMB" ? "0.1" : "1"} value={field.value} placeholder={field.placeholder} unit={unit} disabled={disabled} onChange={(raw) => void save(section, { [key]: raw === "" && key === "seedTimeHours" ? "" : Math.max(0, Number(raw)) } as Partial<SettingsType>)} />} />; };
   const sectionSaved = (section: Section) => savedSection === section;
+  const checkForUpdates = async () => {
+    if (!updateSupported) { setUpdateStatus("Update checks are available in installed builds."); return; }
+    setUpdateBusy(true); setUpdateStatus("Checking for updates…"); setAvailableUpdate(null); setUpdateProgress(undefined);
+    try {
+      const found = await check();
+      setAvailableUpdate(found);
+      setUpdateStatus(found ? `Version ${found.version} is available.` : "Helios is up to date.");
+      if (!found) setTimeout(() => setUpdateStatus(""), 5000);
+    } catch { setUpdateStatus("Could not check for updates. Try again later."); }
+    finally { setUpdateBusy(false); }
+  };
+  const installAvailableUpdate = async () => {
+    if (!availableUpdate) return;
+    setUpdateBusy(true); setUpdateStatus("Downloading update…");
+    try {
+      await installUpdate(availableUpdate, (event: DownloadEvent) => {
+        if (event.event === "Started" && event.data.contentLength) setUpdateProgress(0);
+        if (event.event === "Progress") setUpdateProgress((current) => (current ?? 0) + event.data.chunkLength);
+        if (event.event === "Finished") setUpdateStatus("Installing update…");
+      });
+    } catch { setUpdateStatus("Update failed to install. Helios is still running; try again later."); setUpdateBusy(false); }
+  };
   const defaultDownloads = { maxDownloadMB: DEFAULT_SETTINGS.maxDownloadMB, maxUploadMB: DEFAULT_SETTINGS.maxUploadMB, maxConcurrent: DEFAULT_SETTINGS.maxConcurrent, connectionsPerServer: DEFAULT_SETTINGS.connectionsPerServer, downloadDir: DEFAULT_SETTINGS.downloadDir };
   const copyDiagnostics = async () => {
     try {
@@ -173,7 +203,13 @@ export default function Settings() {
       <SettingRow label="Copy diagnostics" error={rowErrors.diagnostics} control={<Button variant="ghost" onClick={() => void copyDiagnostics()}>Copy</Button>} />
       <SettingRow label="Reset all settings" control={<Button variant="danger-ghost" onClick={() => setResetAll(true)}>Reset</Button>} />
     </SettingsSection></details>
-    <div className="pref-about">Helios {appVersion} · aria2 {ariaVersion || "—"} · <button type="button" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</button>{rowErrors.licenses && <span role="alert">{rowErrors.licenses}</span>}</div>
+    <SettingsSection title="About">
+      <SettingRow label="Helios" description={`Version ${appVersion}`} control={<Button variant="ghost" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</Button>} />
+      <SettingRow label="aria2" description={`Version ${ariaVersion || "—"}`} />
+      <SettingRow label="Check for updates" description={updateStatus || (updateSupported ? "Helios checks for updates automatically when it starts." : "Available in installed builds.")} error={rowErrors.updates} control={availableUpdate ? <Button variant="accent" disabled={updateBusy} onClick={() => void installAvailableUpdate()}>{updateBusy ? "Installing…" : `Install ${availableUpdate.version}`}</Button> : <Button variant="secondary" disabled={!updateSupported || updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? "Checking…" : "Check now"}</Button>} />
+      {updateProgress !== undefined && <div className="pref-row"><div className="pref-label"><small>{updateProgress.toLocaleString()} bytes downloaded</small></div></div>}
+      {rowErrors.licenses && <div className="pref-panel-error" role="alert">{rowErrors.licenses}</div>}
+    </SettingsSection>
     {resetAll && <div className="pref-confirm"><section role="alertdialog" aria-modal="true" aria-labelledby="reset-all-title"><p id="reset-all-title">Reset all preferences?</p><div><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); setNotifications(false); void (async () => { if (inTauri) await updateAutostart(false); await update({ ...DEFAULT_SETTINGS, reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }); })(); }}>Reset all settings</Button></div></section></div>}
     <span className="sr-only" aria-live="polite">{savedSection ? `${savedSection} saved` : ""}</span>
   </section>;

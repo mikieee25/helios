@@ -3,6 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
+import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { installUpdate } from "@/lib/updater";
 import { useStore } from "@/lib/store";
 import TitleBar from "@/components/TitleBar";
 import Sidebar from "@/components/Sidebar";
@@ -61,6 +64,7 @@ export default function Page() {
   }, []);
   useEffect(() => {
     void useStore.getState().start();
+    let updateTimer: number | undefined;
     let paintFrame = 0;
     if ("__TAURI_INTERNALS__" in window) {
       paintFrame = requestAnimationFrame(() => {
@@ -88,6 +92,27 @@ export default function Page() {
     let unlistenNative: (() => void)[] = [];
     if ("__TAURI_INTERNALS__" in window) {
       const win = getCurrentWindow();
+      if (process.env.NODE_ENV === "production") updateTimer = window.setTimeout(() => {
+        void (async () => {
+          let update;
+          try {
+            if (!(await win.isVisible())) return;
+            update = await check();
+            if (!update) return;
+          } catch (error) {
+            console.error("Could not check for a Helios update.", error);
+            return;
+          }
+          const accepted = await confirm(`Helios ${update.version} is available. Download and install it now?`, { title: "Helios update available", kind: "info" });
+          if (!accepted) { await update.close(); return; }
+          try { await installUpdate(update); }
+          catch (error) {
+            await update.close().catch(() => {});
+            await message("Helios could not install the update. You can try again from Settings > About.", { title: "Update failed", kind: "error" }).catch(() => {});
+            console.error("Could not install a Helios update.", error);
+          }
+        })();
+      }, 15000);
       const shutdownAndDestroy = async () => {
         if (closing) return;
         closing = true;
@@ -168,6 +193,7 @@ export default function Page() {
     return () => {
       disposed = true;
       if (paintFrame) cancelAnimationFrame(paintFrame);
+      if (updateTimer) window.clearTimeout(updateTimer);
       unlistenClose?.();
       unlistenNative.forEach((unlisten) => unlisten());
       window.removeEventListener("paste", onPaste);

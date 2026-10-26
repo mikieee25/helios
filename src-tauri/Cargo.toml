@@ -28,6 +28,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 uuid = { version = "1", features = ["v4"] }
 os_info = "3.15"
 tokio = { version = "1", features = ["sync", "time"] }

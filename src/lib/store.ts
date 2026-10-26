@@ -13,6 +13,8 @@ import { dominantCategory, fileCategory, type FileCategory } from "./format";
 import { readValue, writeValue } from "./persistence";
 import { selectionTotals, type TorrentFile } from "./torrent-files";
 import { redactDiagnostics } from "./diagnostics";
+import { reconcileTaskSnapshot } from "./task-snapshot";
+import { taskActionForAria2Status } from "./task-actions";
 
 export type UiState = "dl" | "seed" | "pa" | "done" | "err";
 export type Filter = "all" | "dl" | "seed" | "done";
@@ -200,6 +202,7 @@ interface S {
   clearHistory(): Promise<void>;
   removeHistory(id: string): Promise<void>;
   shutdown(): Promise<void>;
+  saveSession(): Promise<void>;
   toggle(t: Task): Promise<void>;
   add(uri: string): void;
   addUris(uris: string[], options?: AddOptions): Promise<string[]>;
@@ -468,7 +471,11 @@ export const useStore = create<S>((set, get) => {
           previous && same(previous, task) ? previous : task
         );
       }
-      const tasks = [...taskByGid.values()];
+      const tasks = reconcileTaskSnapshot(
+        [...old.values()],
+        [...taskByGid.values()],
+        shouldFetchStopped
+      );
       for (const task of tasks) {
         if (task.state !== "err" || old.get(task.gid)?.state === "err" || notifiedFailures.has(task.gid)) continue;
         notifiedFailures.add(task.gid);
@@ -661,6 +668,9 @@ export const useStore = create<S>((set, get) => {
       if (api) api.reconnect();
       else void get().start();
     },
+    async saveSession() {
+      if (api) await api.call("saveSession");
+    },
     setFilter: (filter) => set({ filter }),
     setCategory: (category) =>
       set({ category: get().category === category ? undefined : category }),
@@ -787,14 +797,25 @@ export const useStore = create<S>((set, get) => {
       return shutdownPromise;
     },
     async toggle(t) {
-      const method =
-        t.state === "dl" || t.state === "seed" || t.queued
-          ? "pause"
-          : t.state === "pa"
-            ? "unpause"
-            : null;
-      if (method && api) {
-        await api.call(method, t.gid);
+      if (!api) return;
+      try {
+        const { status } = await api.call<{ status: string }>(
+          "tellStatus",
+          t.gid,
+          ["status"]
+        );
+        const method = taskActionForAria2Status(status);
+        if (method) await api.call(method, t.gid);
+      } catch (error) {
+        const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+        if (
+          !message.includes("cannot be paused now") &&
+          !message.includes("cannot be unpaused now") &&
+          !message.includes("not found")
+        ) {
+          throw error;
+        }
+      } finally {
         void refresh(true);
       }
     },

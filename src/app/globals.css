@@ -260,9 +260,11 @@ svg.i {
 }
 .row {
   display: grid;
-  grid-template-columns:
-    minmax(0, 2.1fr) minmax(70px, 1.3fr) minmax(48px, 0.8fr)
-    minmax(70px, 0.9fr) minmax(35px, 0.55fr) minmax(35px, 0.55fr);
+  grid-template-columns: var(
+    --task-columns,
+    minmax(140px, 2.1fr) minmax(72px, 1.3fr) minmax(52px, 0.8fr)
+      minmax(72px, 0.9fr) minmax(40px, 0.55fr) minmax(40px, 0.55fr)
+  );
   align-items: center;
   gap: 8px;
   padding: 0 16px;
@@ -281,6 +283,35 @@ svg.i {
   letter-spacing: 0.14em;
   color: var(--dim);
   cursor: default;
+}
+.row.head > :first-child {
+  padding-left: 50px;
+}
+.row.head > span {
+  position: relative;
+}
+.column-resizer {
+  position: absolute;
+  z-index: 2;
+  inset: 0 -12px 0 auto;
+  width: 24px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.column-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 7px auto 7px 11px;
+  width: 1px;
+  border-radius: 1px;
+  background: transparent;
+}
+.column-resizer:hover::after,
+.column-resizer:focus-visible::after {
+  background: var(--cy);
+}
+.column-resizer:focus-visible {
+  outline: none;
 }
 .row.sel {
   background: var(--sel);
@@ -1208,6 +1239,7 @@ svg.i {
 .body > main {
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
 }
 .low {
   min-width: 0;
@@ -1221,6 +1253,42 @@ svg.i {
 }
 .big {
   font-size: clamp(20px, 2vw, 26px);
+}
+
+/* Keep the dashboard readable when the window leaves little room for its
+   two-column transfer panel. */
+@container (max-width: 960px) {
+  .low {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .body {
+    grid-template-columns: clamp(180px, 19vw, 220px) minmax(0, 1fr);
+    column-gap: clamp(16px, 2vw, 24px);
+    padding-inline: clamp(14px, 2vw, 22px);
+  }
+  .low {
+    gap: 22px;
+    padding-top: 22px;
+  }
+}
+
+/* On short windows, give the task area a real minimum height and let the
+   dashboard continue below it in the existing scrollable body. */
+@media (max-height: 820px) {
+  .body > main {
+    min-height: max-content;
+  }
+  .tbl {
+    flex: 0 0 clamp(220px, 34vh, 320px);
+  }
+  .low {
+    flex: none;
+    margin-top: 22px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1282,6 +1350,7 @@ svg.i {
         0.6fr
       );
   }
+  .column-resizer { display: none; }
   .row > :nth-child(4),
   .row > :nth-child(5),
   .row > :nth-child(6) {

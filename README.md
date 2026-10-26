@@ -100,6 +100,8 @@ npm run tauri build
 
 In GitHub, open **Actions** > **Release** > **Run workflow**, select `main`, choose a `patch`, `minor`, or `major` bump, then run it. The workflow updates the version files, pushes a version tag, builds the Windows x64 installer, and creates a draft release.
 
+The updater uses a Tauri signing key. The private key is stored locally at `%USERPROFILE%\.tauri\helios-updater.key`; protect it and keep a secure backup. Add its contents to the repository secret `TAURI_SIGNING_PRIVATE_KEY` before running a release. In PowerShell: `Get-Content -Raw "$env:USERPROFILE\.tauri\helios-updater.key" | gh secret set TAURI_SIGNING_PRIVATE_KEY`. For local release builds, set `$env:TAURI_SIGNING_PRIVATE_KEY="$env:USERPROFILE\.tauri\helios-updater.key"` before `npm run tauri build`. Releases include `latest.json` and the updater signature; publish the draft release to make updates available. Existing Helios 0.1.2 installs need one manual install of a release that includes the updater before they can update in-app.
+
 Under **Settings** > **Actions** > **General** > **Workflow permissions**, choose **Read and write permissions**. Branch protection on `main` blocks the workflow's push unless the bot can bypass those rules.
 
 If a run fails after its tag was pushed, delete the unpublished draft release and the tag, then run the workflow again.
