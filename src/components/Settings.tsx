@@ -98,6 +98,29 @@ export default function Settings() {
     const apply = () => { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme; };
     apply(); const query = matchMedia("(prefers-color-scheme: dark)"); query.addEventListener("change", apply); return () => query.removeEventListener("change", apply);
   }, [settings.theme]);
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const root = document.querySelector<HTMLElement>(".settings-view");
+    if (!root) return;
+    const frame = requestAnimationFrame(() => {
+      const rows = Array.from(root.querySelectorAll<HTMLElement>(".pref-row")).flatMap((row) => {
+        const control = row.querySelector<HTMLElement>(":scope > .pref-control");
+        return control ? [{ row, control, child: control.firstElementChild as HTMLElement | null }] : [];
+      });
+      if (!rows.length) return;
+      const reference = rows[0].control.getBoundingClientRect();
+      const referenceChild = rows[0].child?.getBoundingClientRect();
+      rows.forEach(({ row, control, child }) => {
+        const rect = control.getBoundingClientRect();
+        const childRect = child?.getBoundingClientRect();
+        if (Math.abs(rect.width - reference.width) > 0.5 || Math.abs(rect.right - reference.right) > 0.5 || (childRect && referenceChild && (Math.abs(childRect.width - referenceChild.width) > 0.5 || Math.abs(childRect.right - referenceChild.right) > 0.5))) {
+          const label = row.querySelector<HTMLElement>(":scope > .pref-label")?.innerText.trim().replace(/\s+/g, " ") || "Unnamed row";
+          console.warn(`[Settings layout] ${label}: control column or child is misaligned.`);
+        }
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const chooseFolder = async () => { const selected = await open({ directory: true, multiple: false, title: "Choose download folder" }); if (typeof selected === "string") save("Downloads", { downloadDir: selected }); };
   const proxyPatch = (patch: Partial<typeof proxy>) => {
     const next = { ...proxy, ...patch }; setProxy(next);
@@ -194,15 +217,15 @@ export default function Settings() {
       {settings.startWithWindows && <div className="pref-subrows"><SettingRow label="Start minimized to tray" control={<Toggle label="Start minimized to tray" checked={settings.startMinimized} onChange={(value) => save("App", { startMinimized: value })} />} /></div>}
       <SettingRow label="Close button hides to tray" error={rowErrors.closeToTray} control={<Toggle label="Close button hides to tray" checked={settings.closeToTray} onChange={(value) => void save("App", { closeToTray: value })} />} />
     </SettingsSection>}
-    <details className="pref-advanced"><summary>Advanced</summary><SettingsSection title="Advanced" saved={sectionSaved("Advanced")} reset={() => reset("Advanced", ["fasterDnsFallback", "diskAllocation", "connectTimeoutSeconds", "customUserAgent"])}>
+    <SettingsSection title="Advanced" saved={sectionSaved("Advanced")} collapsible defaultCollapsed reset={() => reset("Advanced", ["fasterDnsFallback", "diskAllocation", "connectTimeoutSeconds", "customUserAgent"])}>
       <SettingRow label="Faster DNS fallback" error={rowErrors.fasterDnsFallback} control={<Toggle label="Faster DNS fallback" checked={settings.fasterDnsFallback} onChange={(value) => void save("Advanced", { fasterDnsFallback: value })} />} />
       <SettingRow label="Disk allocation" error={rowErrors.diskAllocation} control={<Choice label="Disk allocation" value={settings.diskAllocation} onChange={(value) => void save("Advanced", { diskAllocation: value as SettingsType["diskAllocation"] })} options={[["none", "Off"], ["prealloc", "Reserve space"], ["falloc", "Fast reserve"]]} />} />
       {num("Advanced", "Connection timeout", "connectTimeoutSeconds", "10", "s")}
       <SettingRow label="Custom user agent" error={rowErrors.customUserAgent} control={<TextField aria-label="Custom user agent" value={settings.customUserAgent} placeholder="Default" onChange={(event) => void save("Advanced", { customUserAgent: event.target.value })} />} />
-      <SettingRow label="Open data folder" error={rowErrors.openDataFolder} control={<Button variant="ghost" onClick={() => void invoke("open_data_folder").catch(() => setRowErrors((current) => ({ ...current, openDataFolder: "Could not open the data folder." })))}>Open</Button>} />
-      <SettingRow label="Copy diagnostics" error={rowErrors.diagnostics} control={<Button variant="ghost" onClick={() => void copyDiagnostics()}>Copy</Button>} />
-      <SettingRow label="Reset all settings" control={<Button variant="danger-ghost" onClick={() => setResetAll(true)}>Reset</Button>} />
-    </SettingsSection></details>
+      <SettingRow label="Open data folder" error={rowErrors.openDataFolder} control={<Button variant="secondary" className="pref-action-button" onClick={() => void invoke("open_data_folder").catch(() => setRowErrors((current) => ({ ...current, openDataFolder: "Could not open the data folder." })))}>Open</Button>} />
+      <SettingRow label="Copy diagnostics" error={rowErrors.diagnostics} control={<Button variant="secondary" className="pref-action-button" onClick={() => void copyDiagnostics()}>Copy</Button>} />
+      <SettingRow label="Reset all settings" control={<Button variant="danger-outline" className="pref-action-button" onClick={() => setResetAll(true)}>Reset</Button>} />
+    </SettingsSection>
     <SettingsSection title="About">
       <SettingRow label="Helios" description={`Version ${appVersion}`} control={<Button variant="ghost" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</Button>} />
       <SettingRow label="aria2" description={`Version ${ariaVersion || "—"}`} />
