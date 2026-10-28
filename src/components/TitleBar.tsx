@@ -69,8 +69,8 @@ function animateButtonHover(
       button,
       {
         boxShadow: `0 0 0 0 rgba(${color}, 0)`,
-        duration: 0.72,
-        ease: "sine.out",
+        duration: 0.8,
+        ease: "sine.inOut",
         clearProps: "boxShadow",
       },
       0
@@ -78,9 +78,10 @@ function animateButtonHover(
     .to(
       shine,
       {
+        xPercent: 220,
         opacity: 0,
-        duration: 0.2,
-        ease: "sine.out",
+        duration: 0.52,
+        ease: "sine.inOut",
         clearProps: "opacity,transform",
       },
       0

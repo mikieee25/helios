@@ -114,6 +114,10 @@ svg.i {
   background: var(--sel);
   color: var(--mut);
 }
+.bar .r .add-download,
+.bar .r .transfer-action {
+  transition: background-color 0.24s ease, color 0.24s ease;
+}
 .bar .r .shine-cyan {
   --shine-rgb: 73, 195, 232;
 }
