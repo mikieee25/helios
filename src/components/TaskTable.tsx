@@ -442,21 +442,20 @@ export default function TaskTable() {
         }
       }
       const inner = element.firstElementChild as HTMLElement | null;
-      if (!reset && !previousKeys.current.has(key) && !isReduced) {
-        if (inner)
-          gsap.fromTo(
-            inner,
-            { opacity: 0, x: -12 },
-            {
-              opacity: 1,
-              x: 0,
-              duration: 0.35,
-              overwrite: "auto",
-              onComplete: () =>
-                gsap.set(inner, { clearProps: "opacity,transform" }),
-            }
-          );
-      } else if (inner) gsap.set(inner, { clearProps: "opacity,transform" });
+      if (inner && !isReduced && !reset && !previousKeys.current.has(key)) {
+        gsap.fromTo(
+          inner,
+          { opacity: 0, x: -12 },
+          {
+            opacity: 1,
+            x: 0,
+            duration: 0.35,
+            overwrite: "auto",
+            onComplete: () =>
+              gsap.set(inner, { clearProps: "opacity,transform" }),
+          }
+        );
+      }
       positions.current.set(key, item.start);
     }
     const scroller = parentRef.current;
