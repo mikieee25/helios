@@ -7,7 +7,6 @@ import { Ic } from "./Icon";
 
 // Window controls only work inside Tauri; in a plain browser they do nothing.
 const win = () => ("__TAURI_INTERNALS__" in window ? getCurrentWindow() : null);
-const hoverAnimations = new WeakMap<HTMLButtonElement, gsap.core.Timeline>();
 
 function animateButtonHover(
   button: HTMLButtonElement,
@@ -18,74 +17,20 @@ function animateButtonHover(
   const shine = button.querySelector<HTMLElement>(".button-shine");
   if (!shine) return;
 
-  hoverAnimations.get(button)?.kill();
   if (prefersReducedMotion(reduceMotion)) {
     gsap.set(button, { clearProps: "boxShadow" });
     gsap.set(shine, { clearProps: "opacity,transform" });
     return;
   }
 
-  const timeline = gsap.timeline({
-    onComplete: () => hoverAnimations.delete(button),
-  });
-  hoverAnimations.set(button, timeline);
-
   if (hovered) {
-    timeline
-      .fromTo(
-        shine,
-        { xPercent: -180, opacity: 0 },
-        {
-          xPercent: 180,
-          opacity: 0.85,
-          duration: 0.38,
-          ease: "power2.out",
-        }
-      )
-      .to(
-        shine,
-        {
-          opacity: 0,
-          duration: 0.18,
-          ease: "power1.out",
-          clearProps: "opacity,transform",
-        },
-        "-=0.1"
-      )
-      .to(
-        button,
-        {
-          boxShadow: `0 0 14px 2px rgba(${color}, 0.58)`,
-          duration: 0.2,
-          ease: "sine.out",
-        },
-        0
-      );
+    gsap.set(button, { boxShadow: `0 0 14px 2px rgba(${color}, 0.58)` });
+    gsap.set(shine, { xPercent: 180, opacity: 0.85 });
     return;
   }
 
-  timeline
-    .to(
-      button,
-      {
-        boxShadow: `0 0 0 0 rgba(${color}, 0)`,
-        duration: 0.8,
-        ease: "sine.inOut",
-        clearProps: "boxShadow",
-      },
-      0
-    )
-    .to(
-      shine,
-      {
-        xPercent: 220,
-        opacity: 0,
-        duration: 0.52,
-        ease: "sine.inOut",
-        clearProps: "opacity,transform",
-      },
-      0
-    );
+  gsap.set(button, { clearProps: "boxShadow" });
+  gsap.set(shine, { clearProps: "opacity,transform" });
 }
 
 export default function TitleBar({ onAdd }: { onAdd(): void }) {
