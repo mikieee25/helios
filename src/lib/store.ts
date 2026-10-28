@@ -39,6 +39,8 @@ export type Task = {
   errorCode: string;
 };
 export type AddOptions = Record<string, string | string[]>;
+type RetrySource = { kind: "uris"; uris: string[] };
+type RetrySourceMap = Record<string, RetrySource>;
 export type Settings = {
   maxDownloadMB: number;
   maxUploadMB: number;
@@ -57,7 +59,6 @@ export type Settings = {
   seedTimeHours: number | "";
   neverSeed: boolean;
   fileConflict: "rename" | "overwrite" | "error";
-  fasterDnsFallback: boolean;
   diskAllocation: "none" | "prealloc" | "falloc";
   notifyFinished: boolean;
   notifyFailed: boolean;
@@ -91,7 +92,6 @@ export const DEFAULT_SETTINGS: Settings = {
   seedTimeHours: "",
   neverSeed: false,
   fileConflict: "rename",
-  fasterDnsFallback: false,
   diskAllocation: "prealloc",
   notifyFinished: true,
   notifyFailed: true,
@@ -238,6 +238,8 @@ let shutdownPromise: Promise<void> | undefined;
 let stoppedRevision = 1;
 let loadedStoppedRevision = 0;
 let stoppedCache: Record<string, any>[] = [];
+let retrySources: RetrySourceMap = {};
+let retrySourcesWrite = Promise.resolve();
 let refreshTicks = 0;
 let unlistenBridgeAdded: UnlistenFn | undefined;
 let aria2DefaultDir: string | undefined;
@@ -355,7 +357,6 @@ export function optionsFor(settings: Settings, defaultDir?: string) {
     "max-concurrent-downloads": String(settings.maxConcurrent),
     "max-connection-per-server": String(settings.connectionsPerServer),
     split: String(settings.connectionsPerServer),
-    "async-dns": String(!settings.fasterDnsFallback),
     "file-allocation": settings.diskAllocation,
     "connect-timeout": String(settings.connectTimeoutSeconds),
     "user-agent": settings.customUserAgent,
@@ -432,6 +433,26 @@ export const useStore = create<S>((set, get) => {
       }
       const activeWaiting = [...r[0][0], ...r[1][0]];
       const activeGids = new Set(activeWaiting.map((task: any) => task.gid));
+      const sourceCandidates = activeWaiting.filter(
+        (task: any) => !task.bittorrent && !retrySources[task.gid]
+      );
+      await Promise.all(
+        sourceCandidates.map(async (task: any) => {
+          try {
+            const uris = await client.call<any[]>("getUris", task.gid);
+            const sources = uris
+              .map((entry) => String(entry.uri ?? ""))
+              .filter(Boolean);
+            if (sources.length)
+              await rememberRetrySource(task.gid, {
+                kind: "uris",
+                uris: sources,
+              });
+          } catch {
+            // Some sources are unavailable from aria2; keep polling while active.
+          }
+        })
+      );
       const selectedFiles = new Map<string, TorrentFile[]>();
       await Promise.all(
         activeWaiting
@@ -476,6 +497,10 @@ export const useStore = create<S>((set, get) => {
         [...taskByGid.values()],
         shouldFetchStopped
       );
+      const completedSources = tasks
+        .filter((task) => task.state === "done" && retrySources[task.gid])
+        .map((task) => task.gid);
+      if (completedSources.length) await forgetRetrySources(completedSources);
       for (const task of tasks) {
         if (task.state !== "err" || old.get(task.gid)?.state === "err" || notifiedFailures.has(task.gid)) continue;
         notifiedFailures.add(task.gid);
@@ -558,12 +583,51 @@ export const useStore = create<S>((set, get) => {
     }
   }
 
+  function persistRetrySources() {
+    const snapshot = { ...retrySources };
+    retrySourcesWrite = retrySourcesWrite
+      .catch(() => {})
+      .then(() => writeValue("retrySources", snapshot));
+    return retrySourcesWrite;
+  }
+
+  async function rememberRetrySource(gid: string, source: RetrySource) {
+    retrySources[gid] = source;
+    try {
+      await persistRetrySources();
+    } catch {
+      recordDiagnosticError("Could not save local retry source data");
+    }
+  }
+
+  async function forgetRetrySources(gids: string[]) {
+    let changed = false;
+    for (const gid of gids) {
+      if (retrySources[gid]) {
+        delete retrySources[gid];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    try {
+      await persistRetrySources();
+    } catch {
+      recordDiagnosticError("Could not update local retry source data");
+    }
+  }
+
   async function initialize() {
-    const [history, settings, legacyChooseFiles] = await Promise.all([
-      historyStore.load(),
-      readValue<Partial<Settings>>("settings", {}),
-      readValue<boolean>("chooseFilesBeforeStarting", false),
-    ]);
+    const [history, settings, legacyChooseFiles, storedRetrySources] =
+      await Promise.all([
+        historyStore.load(),
+        readValue<Partial<Settings>>("settings", {}),
+        readValue<boolean>("chooseFilesBeforeStarting", false),
+        readValue<RetrySourceMap>("retrySources", {}),
+      ]);
+    retrySources =
+      storedRetrySources && typeof storedRetrySources === "object"
+        ? storedRetrySources
+        : {};
     const loadedSettings = clampSettings({
       ...DEFAULT_SETTINGS,
       ...settings,
@@ -583,10 +647,20 @@ export const useStore = create<S>((set, get) => {
     rpcSecret = BROWSER_SECRET;
     if (inTauri()) {
       unlistenBridgeAdded?.();
-      unlistenBridgeAdded = await listen<{ gids: string[] }>(
+      unlistenBridgeAdded = await listen<{
+        gids: string[];
+        sources?: { gid: string; uri: string }[];
+      }>(
         "bridge://added",
         ({ payload }) => {
-          if (payload.gids.length) void refresh(true);
+          const saved = Promise.all(
+            (payload.sources ?? []).map(({ gid, uri }) =>
+              uri
+                ? rememberRetrySource(gid, { kind: "uris", uris: [uri] })
+                : undefined
+            )
+          );
+          if (payload.gids.length) void saved.then(() => refresh(true));
         }
       );
       await invoke("bridge_set_enabled", {
@@ -841,7 +915,8 @@ export const useStore = create<S>((set, get) => {
     },
     add(uri) {
       api
-        ?.call("addUri", [uri])
+        ?.call<string>("addUri", [uri])
+        .then((gid) => rememberRetrySource(gid, { kind: "uris", uris: [uri] }))
         .then(() => refresh(true))
         .catch(() => {});
     },
@@ -850,7 +925,8 @@ export const useStore = create<S>((set, get) => {
       const errors = await Promise.all(
         uris.map(async (uri) => {
           try {
-            await api!.call("addUri", [uri], options);
+            const gid = await api!.call<string>("addUri", [uri], options);
+            await rememberRetrySource(gid, { kind: "uris", uris: [uri] });
             return "";
           } catch (error) {
             return error instanceof Error ? error.message : String(error);
@@ -863,6 +939,7 @@ export const useStore = create<S>((set, get) => {
     async addUri(uri, options = {}) {
       if (!api) throw new Error("aria2 is not connected");
       const gid = await api.call<string>("addUri", [uri], options);
+      await rememberRetrySource(gid, { kind: "uris", uris: [uri] });
       void refresh(true);
       return gid;
     },
@@ -908,6 +985,7 @@ export const useStore = create<S>((set, get) => {
           "aria2 is not connected; the torrent could not be canceled."
         );
       const errors: string[] = [];
+      const removed: string[] = [];
       const alreadyGone = (error: unknown) => {
         const message = (
           error instanceof Error ? error.message : String(error)
@@ -919,23 +997,30 @@ export const useStore = create<S>((set, get) => {
         );
       };
       for (const gid of new Set(gids)) {
+        let failed = false;
         try {
           await api.call("forceRemove", gid);
         } catch (error) {
-          if (!alreadyGone(error))
+          if (!alreadyGone(error)) {
+            failed = true;
             errors.push(
               `${gid}: ${error instanceof Error ? error.message : String(error)}`
             );
+          }
         }
         try {
           await api.call("removeDownloadResult", gid);
         } catch (error) {
-          if (!alreadyGone(error))
+          if (!alreadyGone(error)) {
+            failed = true;
             errors.push(
               `${gid}: ${error instanceof Error ? error.message : String(error)}`
             );
+          }
         }
+        if (!failed) removed.push(gid);
       }
+      await forgetRetrySources(removed);
       void refresh(true);
       if (errors.length) throw new Error(errors.join("\n"));
     },
@@ -985,6 +1070,7 @@ export const useStore = create<S>((set, get) => {
       } finally {
         void refresh(true);
       }
+      await forgetRetrySources([task.gid]);
       if (alsoDeleteFiles && !task.files.some((file) => file.path))
         throw new Error("aria2 has not provided file paths for this download.");
       if (alsoDeleteFiles && task.files.length) {
@@ -997,13 +1083,27 @@ export const useStore = create<S>((set, get) => {
     },
     async retryTask(task) {
       if (!api) throw new Error("aria2 is not connected");
-      const uris = await get().taskUris(task.gid);
-      if (!uris.length)
-        throw new Error("No source URLs are available to retry.");
-      const errors = await get().addUris(uris);
+      let source = retrySources[task.gid];
+      if (!source) {
+        try {
+          const uris = await get().taskUris(task.gid);
+          if (uris.length) {
+            source = { kind: "uris", uris };
+            await rememberRetrySource(task.gid, source);
+          }
+        } catch {
+          // Fall through to the saved source and report a clear error if absent.
+        }
+      }
+      if (!source)
+        throw new Error(
+          `The original source for “${task.name}” is unavailable. Remove the failed task and add its link again.`
+        );
+      const errors = await get().addUris(source.uris);
       const failed = errors.find(Boolean);
       if (failed) throw new Error(failed);
       await api.call("removeDownloadResult", task.gid);
+      await forgetRetrySources([task.gid]);
       void refresh(true);
     },
   };

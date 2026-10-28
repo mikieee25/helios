@@ -1,6 +1,8 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { gsap } from "gsap";
 import { useStore, clock, N } from "@/lib/store";
+import { prefersReducedMotion } from "@/lib/motion";
 
 const W = 560,
   H = 286,
@@ -24,8 +26,82 @@ function curve(p: number[][]) {
 
 export function SeriesToggle() {
   const series = useStore((s) => s.series);
+  const reduceMotion = useStore((s) => s.settings.reduceMotion);
+  const toggleRef = useRef<HTMLDivElement>(null);
+  const indicatorRef = useRef<HTMLSpanElement>(null);
+  const previousSeries = useRef<typeof series | null>(null);
+
+  useLayoutEffect(() => {
+    const toggle = toggleRef.current;
+    const indicator = indicatorRef.current;
+    const active = toggle?.querySelector("button.on");
+    if (!toggle || !indicator || !active) return;
+
+    const move = (animate: boolean) => {
+      const toggleRect = toggle.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      const position = {
+        x: activeRect.left - toggleRect.left,
+        y: activeRect.top - toggleRect.top,
+        width: activeRect.width,
+        height: activeRect.height,
+        autoAlpha: 1,
+      };
+      if (
+        previousSeries.current === null ||
+        !animate ||
+        prefersReducedMotion(reduceMotion)
+      ) {
+        gsap.set(indicator, position);
+      } else {
+        gsap.to(indicator, {
+          ...position,
+          duration: 0.24,
+          ease: "power3.out",
+          overwrite: true,
+        });
+      }
+    };
+
+    move(previousSeries.current !== null && previousSeries.current !== series);
+    previousSeries.current = series;
+    return () => {
+      gsap.killTweensOf(indicator);
+    };
+  }, [series, reduceMotion]);
+
+  useLayoutEffect(() => {
+    const toggle = toggleRef.current;
+    const indicator = indicatorRef.current;
+    if (!toggle || !indicator) return;
+
+    const syncPosition = () => {
+      const active = toggle.querySelector("button.on");
+      if (!active) return;
+      const toggleRect = toggle.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      gsap.killTweensOf(indicator);
+      gsap.set(indicator, {
+        x: activeRect.left - toggleRect.left,
+        y: activeRect.top - toggleRect.top,
+        width: activeRect.width,
+        height: activeRect.height,
+        autoAlpha: 1,
+      });
+      previousSeries.current = useStore.getState().series;
+    };
+    const observer = new ResizeObserver(syncPosition);
+    observer.observe(toggle);
+    window.addEventListener("resize", syncPosition);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", syncPosition);
+    };
+  }, []);
+
   return (
-    <div className="seg">
+    <div ref={toggleRef} className="seg">
+      <span ref={indicatorRef} className="seg-active" aria-hidden="true" />
       <button
         className={series === "dl" ? "on" : ""}
         onClick={() => useStore.getState().setSeries("dl")}
@@ -58,11 +134,15 @@ export default function Chart() {
     let mix = 0,
       ymax = 14,
       raf = 0;
+    const motionPreference =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")
+        : null;
 
     // The line scrolls left continuously; its head eases toward each new sample.
     const frame = (now: number) => {
       const { dlHist, upHist, series, settings } = useStore.getState();
-      const reduced = settings.reduceMotion;
+      const reduced = settings.reduceMotion || !!motionPreference?.matches;
       const tgt = series === "ul" ? 1 : 0;
       const f = reduced ? 1 : Math.min(1, (now - clock.t) / 1000);
       mix += (tgt - mix) * 0.14;
@@ -90,7 +170,28 @@ export default function Chart() {
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+
+    // The SVG stretches (preserveAspectRatio="none") to whatever box CSS gives
+    // it. Counter-scale the live dot and glow so they stay round, and keep the
+    // stroke at a constant pixel width.
+    line.setAttribute("vector-effect", "non-scaling-stroke");
+    const fit = () => {
+      const r = svg.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      const t = `scale(${(W / r.width).toFixed(4)}, ${(H / r.height).toFixed(4)})`;
+      for (const el of [dot, glow] as SVGElement[]) {
+        el.style.transformBox = "fill-box";
+        el.style.transformOrigin = "center";
+        el.style.transform = t;
+      }
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(svg);
+    fit();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, []);
 
   return (

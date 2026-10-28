@@ -1,8 +1,8 @@
 mod bridge;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 use std::{
     net::TcpListener,
     sync::{
@@ -31,7 +31,14 @@ struct Aria {
     shutting_down: Arc<AtomicBool>,
 }
 
-fn aria2_args(port: u16, secret: &str, session: &str, dir: &str, connect_timeout: u32) -> Vec<String> {
+fn aria2_args(
+    port: u16,
+    secret: &str,
+    session: &str,
+    state_dir: &str,
+    dir: &str,
+    connect_timeout: u32,
+) -> Vec<String> {
     vec![
         "--enable-rpc".into(),
         format!("--rpc-listen-port={port}"),
@@ -47,7 +54,33 @@ fn aria2_args(port: u16, secret: &str, session: &str, dir: &str, connect_timeout
         format!("--input-file={session}"),
         format!("--save-session={session}"),
         "--save-session-interval=30".into(),
+        format!("--state-dir={state_dir}"),
+        "--state-save-interval=10".into(),
     ]
+}
+
+fn rpc_ready_output(output: &str, port: u16) -> bool {
+    output.contains(&format!("IPv4 RPC: listening on TCP port {port}"))
+        || output.contains(&format!("RPC: listening on 127.0.0.1 port {port}"))
+}
+
+fn preserve_legacy_session(session: &std::path::Path) -> std::io::Result<()> {
+    if !session.exists() {
+        return Ok(());
+    }
+    let backup = session.with_file_name("aria2.session.aria2-1.37.0.bak");
+    if !backup.exists() {
+        std::fs::copy(session, backup)?;
+    }
+    Ok(())
+}
+
+fn legacy_ftp_task_count(session: &std::path::Path) -> std::io::Result<usize> {
+    let contents = std::fs::read_to_string(session)?;
+    Ok(contents
+        .lines()
+        .filter(|line| line.trim_start().to_ascii_lowercase().starts_with("ftp://"))
+        .count())
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -409,7 +442,12 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance(move |app, args, _| {
         forward_open_args(app, &callback_pending, &args);
-        show_window(app);
+        // Windows can retain duplicate Run entries for the same app. If the
+        // second launch comes from autostart, don't let it reveal the hidden
+        // first instance through this callback.
+        if !args.iter().any(|arg| arg == "--autostarted") {
+            show_window(app);
+        }
     }));
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
@@ -489,17 +527,31 @@ pub fn run() {
             if !session.exists() {
                 std::fs::File::create(&session)?;
             }
+            preserve_legacy_session(&session)?;
+            let legacy_ftp_tasks = legacy_ftp_task_count(&session)?;
+            if legacy_ftp_tasks > 0 {
+                app.dialog()
+                    .message(format!(
+                        "{legacy_ftp_tasks} saved FTP download(s) cannot be resumed by aria2-next. The original queue is preserved in aria2.session.aria2-1.37.0.bak. Re-add these downloads using an HTTP or HTTPS source if available."
+                    ))
+                    .title("Saved FTP downloads need attention")
+                    .kind(MessageDialogKind::Warning)
+                    .blocking_show();
+            }
+            let state_dir = data.join("aria2-next-state");
+            std::fs::create_dir_all(&state_dir)?;
             let s = session.to_string_lossy().to_string();
+            let state_path = state_dir.to_string_lossy().to_string();
             let dir = app.path().download_dir()?.to_string_lossy().to_string();
 
             let secret = uuid::Uuid::new_v4().simple().to_string();
             let mut started: Option<(u16, CommandChild, tokio::sync::oneshot::Sender<()>)> = None;
-            let mut last_error = "aria2 did not report an RPC listener".to_string();
+            let mut last_error = "aria2-next did not report an RPC listener".to_string();
             for _ in 0..5 {
                 let listener = TcpListener::bind(("127.0.0.1", 0))?;
                 let port = listener.local_addr()?.port();
                 drop(listener);
-                let args = aria2_args(port, &secret, &s, &dir, startup_settings.connect_timeout_seconds);
+                let args = aria2_args(port, &secret, &s, &state_path, &dir, startup_settings.connect_timeout_seconds);
                 let (mut rx, child) = match app
                     .shell()
                     .sidecar("aria2c")
@@ -507,7 +559,7 @@ pub fn run() {
                 {
                     Ok(started) => started,
                     Err(error) => {
-                        last_error = format!("Could not launch aria2: {error}");
+                        last_error = format!("Could not launch aria2-next: {error}");
                         continue;
                     }
                 };
@@ -516,6 +568,7 @@ pub fn run() {
                 let monitor_app = app.handle().clone();
                 let monitor_shutdown = setup_shutting_down.clone();
                 let monitor_session = s.clone();
+                let monitor_state_dir = state_path.clone();
                 let monitor_dir = dir.clone();
                 let monitor_secret = secret.clone();
                 let monitor_connect_timeout = startup_settings.connect_timeout_seconds;
@@ -527,9 +580,7 @@ pub fn run() {
                         match event {
                             CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
                                 let output = String::from_utf8_lossy(&bytes);
-                                if output
-                                    .contains(&format!("IPv4 RPC: listening on TCP port {port}"))
-                                {
+                                if rpc_ready_output(&output, port) {
                                     if !listening {
                                         listening = true;
                                         if let Some(tx) = ready_tx.take() { let _ = tx.send(Ok(())); }
@@ -543,7 +594,7 @@ pub fn run() {
                             CommandEvent::Terminated(status) => {
                                 if let Some(tx) = ready_tx.take() {
                                     let _ =
-                                        tx.send(Err(format!("aria2 exited ({:?})", status.code)));
+                                        tx.send(Err(format!("aria2-next exited ({:?})", status.code)));
                                     return;
                                 }
                                 terminated = true;
@@ -569,7 +620,7 @@ pub fn run() {
                         for delay in [1u64, 2, 4] {
                             tokio::time::sleep(Duration::from_secs(delay)).await;
                             if monitor_shutdown.load(Ordering::SeqCst) { break; }
-                            let args = aria2_args(port, &monitor_secret, &monitor_session, &monitor_dir, monitor_connect_timeout);
+                            let args = aria2_args(port, &monitor_secret, &monitor_session, &monitor_state_dir, &monitor_dir, monitor_connect_timeout);
                             let Ok((mut replacement_rx, replacement_child)) = monitor_app.shell()
                                 .sidecar("aria2c")
                                 .and_then(|command| command.args(args).spawn()) else { continue; };
@@ -577,7 +628,7 @@ pub fn run() {
                                 while let Some(event) = replacement_rx.recv().await {
                                     match event {
                                         CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes)
-                                            if String::from_utf8_lossy(&bytes).contains(&format!("IPv4 RPC: listening on TCP port {port}")) => return true,
+                                            if rpc_ready_output(&String::from_utf8_lossy(&bytes), port) => return true,
                                         CommandEvent::Terminated(_) => return false,
                                         _ => {}
                                     }
@@ -615,13 +666,13 @@ pub fn run() {
                         let _ = child.kill();
                     }
                     Err(error) => {
-                        last_error = format!("aria2 RPC startup timed out: {error}");
+                        last_error = format!("aria2-next RPC startup timed out: {error}");
                         let _ = child.kill();
                     }
                 }
             }
             let Some((port, child, armed_tx)) = started else {
-                let message = format!("aria2 failed to start after 5 port attempts: {last_error}");
+                let message = format!("aria2-next failed to start after 5 port attempts: {last_error}");
                 app.dialog()
                     .message(message.clone())
                     .title("Helios couldn't start")
@@ -669,7 +720,90 @@ pub fn run() {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::should_start_hidden;
+    use super::{aria2_args, legacy_ftp_task_count, preserve_legacy_session, rpc_ready_output, should_start_hidden};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn aria2_next_arguments_use_dedicated_state_and_supported_timeouts() {
+        assert_eq!(
+            aria2_args(6800, "secret", "session", "state", "downloads", 12),
+            [
+                "--enable-rpc",
+                "--rpc-listen-port=6800",
+                "--rpc-secret=secret",
+                "--rpc-listen-all=false",
+                "--continue=true",
+                "--connect-timeout=12",
+                "--retry-wait=2",
+                "--split=16",
+                "--max-connection-per-server=16",
+                "--min-split-size=1M",
+                "--dir=downloads",
+                "--input-file=session",
+                "--save-session=session",
+                "--save-session-interval=30",
+                "--state-dir=state",
+                "--state-save-interval=10",
+            ]
+            .map(str::to_owned)
+        );
+    }
+
+    #[test]
+    fn rpc_startup_detection_accepts_both_engine_log_formats() {
+        assert!(rpc_ready_output(
+            "10/28 14:28:47 [notice] RPC: listening on 127.0.0.1 port 36891",
+            36891
+        ));
+        assert!(rpc_ready_output(
+            "IPv4 RPC: listening on TCP port 36891",
+            36891
+        ));
+        assert!(!rpc_ready_output("RPC: listening on 127.0.0.1 port 1", 36891));
+    }
+
+    #[test]
+    fn legacy_session_backup_is_created_once_and_original_is_kept() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("helios-session-backup-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let session = dir.join("aria2.session");
+        let backup = dir.join("aria2.session.aria2-1.37.0.bak");
+        preserve_legacy_session(&session).unwrap();
+        assert!(!backup.exists());
+        fs::write(&session, "original session").unwrap();
+        preserve_legacy_session(&session).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), b"original session");
+        fs::write(&session, "later session").unwrap();
+        preserve_legacy_session(&session).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), b"original session");
+        assert_eq!(fs::read(&session).unwrap(), b"later session");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_ftp_tasks_are_counted_without_exposing_their_urls() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("helios-ftp-session-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let session = dir.join("aria2.session");
+        fs::write(
+            &session,
+            "https://example.com/file.zip\n dir=C:/Downloads\n\nftp://private.example/file.zip\n",
+        )
+        .unwrap();
+        assert_eq!(legacy_ftp_task_count(&session).unwrap(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn only_autostart_launch_hides_when_enabled() {

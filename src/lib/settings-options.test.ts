@@ -2,19 +2,12 @@ import { describe, expect, it } from "vitest";
 import { clampSettings, DEFAULT_SETTINGS, numberFieldState, optionsFor, validateProxy, type Settings } from "./store";
 
 describe("optionsFor", () => {
-  it("maps advanced DNS and disk-allocation settings", () => {
-    expect(optionsFor(DEFAULT_SETTINGS)).toMatchObject({
-      "async-dns": "true",
-      "file-allocation": "prealloc",
-    });
-    expect(optionsFor({
-      ...DEFAULT_SETTINGS,
-      fasterDnsFallback: true,
-      diskAllocation: "falloc",
-    })).toMatchObject({
-      "async-dns": "false",
-      "file-allocation": "falloc",
-    });
+  it("maps disk-allocation settings without unsupported DNS options", () => {
+    expect(optionsFor(DEFAULT_SETTINGS)["file-allocation"]).toBe("prealloc");
+    expect(optionsFor({ ...DEFAULT_SETTINGS, diskAllocation: "falloc" })[
+      "file-allocation"
+    ]).toBe("falloc");
+    expect(Object.hasOwn(optionsFor(DEFAULT_SETTINGS), "async-dns")).toBe(false);
     expect(optionsFor({
       ...DEFAULT_SETTINGS,
       diskAllocation: "none",

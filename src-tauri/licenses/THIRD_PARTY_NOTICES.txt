@@ -1,18 +1,16 @@
 Third-party software notices
 ============================
 
-aria2
------
-Helios bundles the unmodified aria2 1.37.0 executable as a separate program:
-https://github.com/aria2/aria2
+aria2-next
+----------
+Helios bundles the aria2-next 3.0.9 Windows x86_64 executable as a separate
+program: https://github.com/AnInsomniacy/aria2-next
 
-aria2 is licensed under GPL-2.0-or-later. The corresponding license text is
-provided in aria2/COPYING. The Helios MIT license does not apply to aria2.
+aria2-next is licensed under GNU GPL version 2. The corresponding license text
+is provided in aria2-next/COPYING. aria2-next and its license are independent
+of Helios and its MIT license.
 
-OpenSSL
--------
-This product includes software developed by the OpenSSL Project for use in the
-OpenSSL Toolkit (http://www.openssl.org/). It also includes cryptographic
-software written by Eric Young (eay@cryptsoft.com) and software written by Tim
-Hudson (tjh@cryptsoft.com). See aria2/LICENSE.OpenSSL for the complete OpenSSL
-and original SSLeay license terms.
+OpenSSL linking exception
+-------------------------
+aria2-next documents an OpenSSL linking exception. The full exception text is
+provided in aria2-next/LICENSE.OpenSSL.md.

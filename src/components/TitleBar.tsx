@@ -1,13 +1,95 @@
 "use client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { gsap } from "gsap";
 import { useStore } from "@/lib/store";
+import { prefersReducedMotion } from "@/lib/motion";
 import { Ic } from "./Icon";
 
 // Window controls only work inside Tauri; in a plain browser they do nothing.
 const win = () => ("__TAURI_INTERNALS__" in window ? getCurrentWindow() : null);
+const hoverAnimations = new WeakMap<HTMLButtonElement, gsap.core.Timeline>();
+
+function animateButtonHover(
+  button: HTMLButtonElement,
+  color: string,
+  hovered: boolean,
+  reduceMotion: boolean
+) {
+  const shine = button.querySelector<HTMLElement>(".button-shine");
+  if (!shine) return;
+
+  hoverAnimations.get(button)?.kill();
+  if (prefersReducedMotion(reduceMotion)) {
+    gsap.set(button, { clearProps: "boxShadow" });
+    gsap.set(shine, { clearProps: "opacity,transform" });
+    return;
+  }
+
+  const timeline = gsap.timeline({
+    onComplete: () => hoverAnimations.delete(button),
+  });
+  hoverAnimations.set(button, timeline);
+
+  if (hovered) {
+    timeline
+      .fromTo(
+        shine,
+        { xPercent: -180, opacity: 0 },
+        {
+          xPercent: 180,
+          opacity: 0.85,
+          duration: 0.38,
+          ease: "power2.out",
+        }
+      )
+      .to(
+        shine,
+        {
+          opacity: 0,
+          duration: 0.18,
+          ease: "power1.out",
+          clearProps: "opacity,transform",
+        },
+        "-=0.1"
+      )
+      .to(
+        button,
+        {
+          boxShadow: `0 0 14px 2px rgba(${color}, 0.58)`,
+          duration: 0.2,
+          ease: "sine.out",
+        },
+        0
+      );
+    return;
+  }
+
+  timeline
+    .to(
+      button,
+      {
+        boxShadow: `0 0 0 0 rgba(${color}, 0)`,
+        duration: 0.72,
+        ease: "sine.out",
+        clearProps: "boxShadow",
+      },
+      0
+    )
+    .to(
+      shine,
+      {
+        opacity: 0,
+        duration: 0.2,
+        ease: "sine.out",
+        clearProps: "opacity,transform",
+      },
+      0
+    );
+}
 
 export default function TitleBar({ onAdd }: { onAdd(): void }) {
   const online = useStore((s) => s.online);
+  const reduceMotion = useStore((s) => s.settings.reduceMotion);
   return (
     <div className="bar" data-tauri-drag-region>
       <div className="l" data-tauri-drag-region>
@@ -30,31 +112,82 @@ export default function TitleBar({ onAdd }: { onAdd(): void }) {
         <div className="transfer-controls">
           <button
             type="button"
-            className="add-download"
+            className="add-download shine-cyan"
             aria-label="Add download"
             title="Add download"
+            onPointerEnter={(event) =>
+              animateButtonHover(
+                event.currentTarget,
+                "73, 195, 232",
+                true,
+                reduceMotion
+              )
+            }
+            onPointerLeave={(event) =>
+              animateButtonHover(
+                event.currentTarget,
+                "73, 195, 232",
+                false,
+                reduceMotion
+              )
+            }
             onClick={onAdd}
           >
+            <span className="button-shine" aria-hidden="true" />
             <Ic n="plus" />
           </button>
           <button
             type="button"
-            className="transfer-action"
+            className="transfer-action shine-muted"
             aria-label="Pause all downloads"
             title="Pause all downloads"
             disabled={!online}
+            onPointerEnter={(event) =>
+              animateButtonHover(
+                event.currentTarget,
+                "145, 148, 164",
+                true,
+                reduceMotion
+              )
+            }
+            onPointerLeave={(event) =>
+              animateButtonHover(
+                event.currentTarget,
+                "145, 148, 164",
+                false,
+                reduceMotion
+              )
+            }
             onClick={() => void useStore.getState().pauseAll()}
           >
+            <span className="button-shine" aria-hidden="true" />
             <Ic n="pause" />
           </button>
           <button
             type="button"
-            className="transfer-action"
+            className="transfer-action shine-violet"
             aria-label="Resume all downloads"
             title="Resume all downloads"
             disabled={!online}
+            onPointerEnter={(event) =>
+              animateButtonHover(
+                event.currentTarget,
+                "171, 112, 255",
+                true,
+                reduceMotion
+              )
+            }
+            onPointerLeave={(event) =>
+              animateButtonHover(
+                event.currentTarget,
+                "171, 112, 255",
+                false,
+                reduceMotion
+              )
+            }
             onClick={() => void useStore.getState().resumeAll()}
           >
+            <span className="button-shine" aria-hidden="true" />
             <Ic n="play" />
           </button>
         </div>

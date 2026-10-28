@@ -37,3 +37,6 @@ src-tauri/target
 src-tauri/gen
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
+
+*.zip
+docs/

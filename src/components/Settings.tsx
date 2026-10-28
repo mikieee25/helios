@@ -5,11 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import appPackage from "../../package.json";
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, getAria2Version, getRecentDiagnosticErrors, numberFieldState, useStore, validateProxy, type Settings as SettingsType } from "@/lib/store";
 import { Button, NumberField, SelectField, SettingRow, SettingsSection, TextField, Toggle } from "@/components/settings/ui";
 import { redactDiagnostics } from "@/lib/diagnostics";
 import { installUpdate } from "@/lib/updater";
+import { animateDialogEntrance } from "@/lib/motion";
 
 type BridgeState = { enabled: boolean; port: number; paired: boolean; pairingCode: string | null; pairingExpiresAt: number | null };
 type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: number | null };
@@ -75,6 +76,8 @@ export default function Settings() {
   const [proxy, setProxy] = useState({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy });
   const [proxyError, setProxyError] = useState("");
   const [resetAll, setResetAll] = useState(false);
+  const resetBackdropRef = useRef<HTMLDivElement>(null);
+  const resetDialogRef = useRef<HTMLElement>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [appVersion, setAppVersion] = useState(appPackage.version);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
@@ -82,6 +85,14 @@ export default function Settings() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<number>();
   const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  useLayoutEffect(() => {
+    if (!resetAll) return;
+    return animateDialogEntrance(
+      resetBackdropRef.current,
+      resetDialogRef.current,
+      settings.reduceMotion
+    );
+  }, [resetAll, settings.reduceMotion]);
   const updateSupported = inTauri && process.env.NODE_ENV === "production";
   const save = async (section: Section, patch: Partial<SettingsType>) => {
     await update(patch);
@@ -217,8 +228,7 @@ export default function Settings() {
       {settings.startWithWindows && <div className="pref-subrows"><SettingRow label="Start minimized to tray" control={<Toggle label="Start minimized to tray" checked={settings.startMinimized} onChange={(value) => save("App", { startMinimized: value })} />} /></div>}
       <SettingRow label="Close button hides to tray" error={rowErrors.closeToTray} control={<Toggle label="Close button hides to tray" checked={settings.closeToTray} onChange={(value) => void save("App", { closeToTray: value })} />} />
     </SettingsSection>}
-    <SettingsSection title="Advanced" saved={sectionSaved("Advanced")} collapsible defaultCollapsed reset={() => reset("Advanced", ["fasterDnsFallback", "diskAllocation", "connectTimeoutSeconds", "customUserAgent"])}>
-      <SettingRow label="Faster DNS fallback" error={rowErrors.fasterDnsFallback} control={<Toggle label="Faster DNS fallback" checked={settings.fasterDnsFallback} onChange={(value) => void save("Advanced", { fasterDnsFallback: value })} />} />
+    <SettingsSection title="Advanced" saved={sectionSaved("Advanced")} collapsible defaultCollapsed reset={() => reset("Advanced", ["diskAllocation", "connectTimeoutSeconds", "customUserAgent"])}>
       <SettingRow label="Disk allocation" error={rowErrors.diskAllocation} control={<Choice label="Disk allocation" value={settings.diskAllocation} onChange={(value) => void save("Advanced", { diskAllocation: value as SettingsType["diskAllocation"] })} options={[["none", "Off"], ["prealloc", "Reserve space"], ["falloc", "Fast reserve"]]} />} />
       {num("Advanced", "Connection timeout", "connectTimeoutSeconds", "10", "s")}
       <SettingRow label="Custom user agent" error={rowErrors.customUserAgent} control={<TextField aria-label="Custom user agent" value={settings.customUserAgent} placeholder="Default" onChange={(event) => void save("Advanced", { customUserAgent: event.target.value })} />} />
@@ -228,12 +238,12 @@ export default function Settings() {
     </SettingsSection>
     <SettingsSection title="About">
       <SettingRow label="Helios" description={`Version ${appVersion}`} control={<Button variant="ghost" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</Button>} />
-      <SettingRow label="aria2" description={`Version ${ariaVersion || "—"}`} />
+      <SettingRow label="aria2-next" description={`Version ${ariaVersion || "—"}`} />
       <SettingRow label="Check for updates" description={updateStatus || (updateSupported ? "Helios checks for updates automatically when it starts." : "Available in installed builds.")} error={rowErrors.updates} control={availableUpdate ? <Button variant="accent" disabled={updateBusy} onClick={() => void installAvailableUpdate()}>{updateBusy ? "Installing…" : `Install ${availableUpdate.version}`}</Button> : <Button variant="secondary" disabled={!updateSupported || updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? "Checking…" : "Check now"}</Button>} />
       {updateProgress !== undefined && <div className="pref-row"><div className="pref-label"><small>{updateProgress.toLocaleString()} bytes downloaded</small></div></div>}
       {rowErrors.licenses && <div className="pref-panel-error" role="alert">{rowErrors.licenses}</div>}
     </SettingsSection>
-    {resetAll && <div className="pref-confirm"><section role="alertdialog" aria-modal="true" aria-labelledby="reset-all-title"><p id="reset-all-title">Reset all preferences?</p><div><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); setNotifications(false); void (async () => { if (inTauri) await updateAutostart(false); await update({ ...DEFAULT_SETTINGS, reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }); })(); }}>Reset all settings</Button></div></section></div>}
+    {resetAll && <div ref={resetBackdropRef} className="pref-confirm"><section ref={resetDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="reset-all-title"><p id="reset-all-title">Reset all preferences?</p><div><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); setNotifications(false); void (async () => { if (inTauri) await updateAutostart(false); await update({ ...DEFAULT_SETTINGS, reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }); })(); }}>Reset all settings</Button></div></section></div>}
     <span className="sr-only" aria-live="polite">{savedSection ? `${savedSection} saved` : ""}</span>
   </section>;
 }

@@ -2,7 +2,7 @@
 
 Helios is a desktop app for managing direct downloads and BitTorrent transfers. Add links, magnets, or `.torrent` files; follow progress and transfer speeds; choose files from a torrent; and manage completed downloads from one window.
 
-The current installer is for **Windows x64**. Helios includes the aria2 download engine and can keep running in the system tray.
+The current installer is for **Windows x64**. Helios includes the aria2-next download engine and can keep running in the system tray.
 
 ## For users
 
@@ -27,7 +27,7 @@ Releases are not code-signed yet, so Windows SmartScreen may warn. Select **More
 
 ### Add and manage downloads
 
-- Select **+** or press **Ctrl+N** to add one or more HTTP, HTTPS, FTP, magnet, or `.torrent` sources.
+- Select **+** or press **Ctrl+N** to add one or more HTTP, HTTPS, magnet, or `.torrent` sources.
 - Paste a supported link anywhere in the app, or drop a link or torrent file onto the window.
 - For torrents, choose **Choose files before starting** to select which files to download.
 - Pause, resume, retry, remove, or open completed files from the task list.
@@ -45,9 +45,9 @@ The bridge listens on this computer only. The extension sends download details t
 
 - Node.js and npm
 - Rust stable and the [Tauri prerequisites](https://tauri.app/start/prerequisites/)
-- The aria2 sidecar executable for the target platform
+- The aria2-next sidecar executable for the target platform
 
-The automated release currently packages Windows x64 only. Other platforms need their own Tauri prerequisites and target-specific aria2 sidecar.
+The automated release currently packages Windows x64 only. Other platforms need their own Tauri prerequisites and target-specific aria2-next sidecar.
 
 ### Run locally
 
@@ -58,10 +58,10 @@ npm ci
 npm run tauri dev
 ```
 
-The Tauri app starts aria2 with a per-launch RPC port and secret. To preview the UI in a browser instead, run a local aria2 instance with RPC enabled, then start Next.js in another terminal:
+The Tauri app starts aria2-next with a per-launch RPC port and secret. To preview the UI in a browser instead, run a compatible aria2 JSON-RPC instance with RPC enabled, then start Next.js in another terminal:
 
 ```powershell
-# Terminal 1: aria2 must be installed and available on PATH.
+# Terminal 1: aria2 or aria2-next must be installed and available on PATH.
 aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=helios-dev --rpc-allow-origin-all=true
 
 # Terminal 2
@@ -77,7 +77,7 @@ npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-To build a desktop bundle, place the target-specific aria2 executable in `src-tauri/binaries/` using the target triple in its filename. For Windows x64, use `aria2c-x86_64-pc-windows-msvc.exe`. Then run:
+To build a desktop bundle, run `./scripts/prepare-aria2-next.ps1` to download, verify, and stage the pinned aria2-next sidecar. Then run:
 
 ```powershell
 npm run tauri build
@@ -87,13 +87,13 @@ npm run tauri build
 
 | Path | Purpose |
 | --- | --- |
-| `src/lib/aria2.ts` | aria2 WebSocket JSON-RPC client and reconnect handling |
+| `src/lib/aria2.ts` | aria2-compatible WebSocket JSON-RPC client and reconnect handling |
 | `src/lib/store.ts` | Download state, settings, polling, and speed history |
 | `src/lib/history.ts` | Persistent completion history |
 | `src/lib/persistence.ts` | Tauri storage with a browser `localStorage` fallback |
 | `src/components/TaskTable.tsx` | Virtualized download and completion lists |
 | `src/components/Settings.tsx` | Download and app settings, including browser integration |
-| `src-tauri/src/lib.rs` | Native window, aria2 process, tray, and desktop commands |
+| `src-tauri/src/lib.rs` | Native window, aria2-next process, tray, and desktop commands |
 | `src-tauri/src/bridge.rs` | Loopback browser bridge server |
 
 ### Make a release
@@ -108,4 +108,4 @@ If a run fails after its tag was pushed, delete the unpublished draft release an
 
 ### Licensing
 
-Helios is MIT licensed. aria2 is bundled as a separate, unmodified program under GPL-2.0-or-later; its notices and license files are in `src-tauri/licenses/`.
+Helios is MIT licensed. aria2-next is bundled as a separate program under GPL version 2 with an OpenSSL linking exception; its notices and license files are in `src-tauri/licenses/`.

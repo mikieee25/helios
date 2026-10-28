@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { gsap } from "gsap";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -16,6 +17,8 @@ import Settings from "@/components/Settings";
 import AddDialog from "@/components/AddDialog";
 import SelectFilesDialog from "@/components/SelectFilesDialog";
 import type { BridgeAddItem } from "@/lib/bridge";
+import { isSupportedDownloadSource } from "@/lib/download-source";
+import { prefersReducedMotion } from "@/lib/motion";
 
 type SelectionRequest = {
   gid: string;
@@ -26,6 +29,11 @@ type SelectionRequest = {
 
 export default function Page() {
   const view = useStore((s) => s.view);
+  const reduceMotion = useStore((s) => s.settings.reduceMotion);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const mainContentRef = useRef<HTMLDivElement>(null);
+  const previousView = useRef(view);
+  const introPlayed = useRef(false);
   const [addOpen, setAddOpen] = useState(false);
   const [dropLinks, setDropLinks] = useState<string>();
   const [dropPath, setDropPath] = useState<string>();
@@ -62,6 +70,55 @@ export default function Page() {
     setDropLinks(items.map((item) => item.url).join("\n"));
     setAddOpen(true);
   }, []);
+  useLayoutEffect(() => {
+    if (introPlayed.current) return;
+    if (prefersReducedMotion(reduceMotion)) {
+      introPlayed.current = true;
+      return;
+    }
+    if (!rootRef.current) return;
+    const elements = rootRef.current.querySelectorAll<HTMLElement>(
+      ".bar, .body > .side, .body > main"
+    );
+    const tween = gsap.fromTo(
+      elements,
+      { autoAlpha: 0, y: 9 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.38,
+        stagger: 0.07,
+        ease: "power2.out",
+        clearProps: "opacity,visibility,transform",
+        onComplete: () => {
+          introPlayed.current = true;
+        },
+      }
+    );
+    return () => {
+      tween.kill();
+    };
+  }, [reduceMotion]);
+  useLayoutEffect(() => {
+    const changed = previousView.current !== view;
+    previousView.current = view;
+    const content = mainContentRef.current;
+    if (!changed || !content || prefersReducedMotion(reduceMotion)) return;
+    const tween = gsap.fromTo(
+      content,
+      { autoAlpha: 0, y: 5 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.2,
+        ease: "power2.out",
+        clearProps: "opacity,visibility,transform",
+      }
+    );
+    return () => {
+      tween.kill();
+    };
+  }, [view, reduceMotion]);
   useEffect(() => {
     void useStore.getState().start();
     let updateTimer: number | undefined;
@@ -73,7 +130,7 @@ export default function Page() {
         );
       });
     }
-    // Paste a link (http, ftp or magnet) anywhere to add a download.
+    // Paste an HTTP(S) or magnet link anywhere to add a download.
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target;
       if (
@@ -83,7 +140,7 @@ export default function Page() {
       )
         return;
       const t = e.clipboardData?.getData("text").trim() ?? "";
-      if (/^(https?|ftp|magnet):/i.test(t)) useStore.getState().add(t);
+      if (isSupportedDownloadSource(t)) useStore.getState().add(t);
     };
     window.addEventListener("paste", onPaste);
     let disposed = false;
@@ -202,7 +259,7 @@ export default function Page() {
   }, [openFromBridge]);
 
   return (
-    <div className="win">
+    <div className="win" ref={rootRef}>
       <TitleBar onAdd={() => setAddOpen(true)} />
       <AddDialog
         open={addOpen}
@@ -222,7 +279,7 @@ export default function Page() {
       )}
       <div className="body">
         <Sidebar />
-        <main style={{ minWidth: 0 }}>
+        <main ref={mainContentRef} style={{ minWidth: 0 }}>
           {view === "settings" ? (
             <Settings />
           ) : (

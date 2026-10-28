@@ -20,11 +20,6 @@ on:
           - minor
           - major
 
-env:
-  # Update both values together when moving to another verified aria2 Windows release.
-  ARIA2_VERSION: "1.37.0"
-  ARIA2_SHA256: "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
-
 jobs:
   prepare:
     name: Bump version and push release tag
@@ -130,24 +125,12 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Download and verify aria2 sidecar and notices
+      - name: Download and verify aria2-next sidecar and licenses
         shell: pwsh
-        run: |
-          $archive = Join-Path $env:RUNNER_TEMP "aria2-$env:ARIA2_VERSION-win-64bit-build1.zip"
-          $extract = Join-Path $env:RUNNER_TEMP "aria2-$env:ARIA2_VERSION"
-          $uri = "https://github.com/aria2/aria2/releases/download/release-$env:ARIA2_VERSION/aria2-$env:ARIA2_VERSION-win-64bit-build1.zip"
-          Invoke-WebRequest -Uri $uri -OutFile $archive
-          $actualHash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne $env:ARIA2_SHA256) { throw "aria2 archive SHA-256 mismatch: $actualHash" }
-          Expand-Archive -Path $archive -DestinationPath $extract -Force
-          $aria2Exe = Get-ChildItem -Path $extract -Filter aria2c.exe -Recurse | Select-Object -First 1
-          $copying = Get-ChildItem -Path $extract -Filter COPYING -Recurse | Select-Object -First 1
-          $openssl = Get-ChildItem -Path $extract -Filter LICENSE.OpenSSL -Recurse | Select-Object -First 1
-          if (-not $aria2Exe -or -not $copying -or -not $openssl) { throw 'aria2 executable or required license files are missing from the verified archive.' }
-          New-Item -ItemType Directory -Force src-tauri/binaries, src-tauri/licenses/aria2 | Out-Null
-          Copy-Item $aria2Exe.FullName src-tauri/binaries/aria2c-x86_64-pc-windows-msvc.exe -Force
-          Copy-Item $copying.FullName src-tauri/licenses/aria2/COPYING -Force
-          Copy-Item $openssl.FullName src-tauri/licenses/aria2/LICENSE.OpenSSL -Force
+        run: ./scripts/prepare-aria2-next.ps1
+
+      - name: Verify aria2-next RPC compatibility
+        run: node scripts/smoke-aria2-next.mjs
 
       - name: Check Rust backend
         run: cargo check --manifest-path src-tauri/Cargo.toml

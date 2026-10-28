@@ -1,0 +1,8 @@
+{
+  "version": "3.0.9",
+  "asset": "aria2-next-3.0.9-windows-x86_64.exe",
+  "sha256": "e74899ce4a39815a509bc663d29aca5028f9bdd6b390fe33141eb11d478d1c13",
+  "checksumAsset": "aria2-next-3.0.9-checksums.sha256",
+  "repository": "https://github.com/AnInsomniacy/aria2-next",
+  "tag": "v3.0.9"
+}

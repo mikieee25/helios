@@ -1,17 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { animateDialogEntrance, animateDialogExit } from "@/lib/motion";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { bridgeItemOptions, type BridgeAddItem } from "@/lib/bridge";
+import { isSupportedDownloadSource } from "@/lib/download-source";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const isTorrent = (path: string) => /\.torrent$/i.test(path);
-const validUri = (value: string) =>
-  /^(https?|ftp):\/\/|^magnet:\?/i.test(value);
-
 function toBase64(bytes: Uint8Array) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000)
@@ -38,6 +37,10 @@ export default function AddDialog({
 }) {
   const settings = useStore((s) => s.settings);
   const dialogRef = useRef<HTMLFormElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const presentRef = useRef(isOpen);
+  const [present, setPresent] = useState(isOpen);
+  const [closing, setClosing] = useState(false);
   const [links, setLinks] = useState("");
   const [bridgeItems, setBridgeItems] = useState<BridgeAddItem[]>([]);
   const [directory, setDirectory] = useState("");
@@ -47,6 +50,31 @@ export default function AddDialog({
   const [torrentName, setTorrentName] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+
+  useLayoutEffect(() => {
+    if (isOpen) {
+      presentRef.current = true;
+      setPresent(true);
+      setClosing(false);
+      return animateDialogEntrance(
+        backdropRef.current,
+        dialogRef.current,
+        settings.reduceMotion
+      );
+    }
+    if (!presentRef.current) return;
+    setClosing(true);
+    return animateDialogExit(
+      backdropRef.current,
+      dialogRef.current,
+      settings.reduceMotion,
+      () => {
+        presentRef.current = false;
+        setPresent(false);
+        setClosing(false);
+      }
+    );
+  }, [isOpen, settings.reduceMotion]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -128,7 +156,7 @@ export default function AddDialog({
         if (path) {
           onDropOpen(undefined, path);
         } else {
-          const links = event.payload.paths.filter(validUri);
+          const links = event.payload.paths.filter(isSupportedDownloadSource);
           if (links.length) onDropOpen(links.join("\n"));
         }
       })
@@ -165,7 +193,7 @@ export default function AddDialog({
         "";
       const droppedLinks = text
         .split(/\r?\n/)
-        .filter((line) => validUri(line.trim()))
+        .filter(isSupportedDownloadSource)
         .map((line) => line.trim());
       if (droppedLinks.length) {
         onDropOpen(droppedLinks.join("\n"));
@@ -182,7 +210,7 @@ export default function AddDialog({
     };
   }, [onDropOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen && !present) return null;
 
   async function chooseTorrent() {
     if (!isTauri()) return;
@@ -234,9 +262,11 @@ export default function AddDialog({
         ]);
         return;
       }
-      const valid = allLines.filter(({ uri }) => validUri(uri));
+      const valid = allLines.filter(({ uri }) =>
+        isSupportedDownloadSource(uri)
+      );
       const errorsByLine = allLines
-        .filter(({ uri }) => !validUri(uri))
+        .filter(({ uri }) => !isSupportedDownloadSource(uri))
         .map(({ line, uri }) => `Line ${line}: unsupported link: ${uri}`);
       const bridgeQueues = new Map<string, BridgeAddItem[]>();
       for (const item of bridgeItems) {
@@ -322,7 +352,8 @@ export default function AddDialog({
 
   return (
     <div
-      className="modal-backdrop"
+      ref={backdropRef}
+      className={`modal-backdrop${closing ? " is-closing" : ""}`}
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <form
@@ -357,7 +388,7 @@ export default function AddDialog({
               setTorrent("");
               setTorrentName("");
             }}
-            placeholder={"Paste one link per line\nHTTP, HTTPS, FTP, or magnet"}
+            placeholder={"Paste one link per line\nHTTP, HTTPS, or magnet"}
             rows={5}
           />
         </label>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "@/lib/store";
 import {
@@ -9,6 +9,7 @@ import {
   type TorrentFile,
 } from "@/lib/torrent-files";
 import { sz } from "@/lib/format";
+import { animateDialogEntrance } from "@/lib/motion";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,6 +34,19 @@ export default function SelectFilesDialog({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const reduceMotion = useStore((s) => s.settings.reduceMotion);
+
+  useLayoutEffect(
+    () =>
+      animateDialogEntrance(
+        backdropRef.current,
+        dialogRef.current,
+        reduceMotion
+      ),
+    [reduceMotion]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -131,12 +145,14 @@ export default function SelectFilesDialog({
 
   return (
     <div
+      ref={backdropRef}
       className="modal-backdrop"
       onMouseDown={(event) =>
         event.target === event.currentTarget && void cancel()
       }
     >
       <section
+        ref={dialogRef}
         className="add-dialog select-files-dialog"
         role="dialog"
         aria-modal="true"

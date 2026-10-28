@@ -507,6 +507,17 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                     return;
                 }
             };
+            if body.items.iter().any(|item| {
+                Url::parse(&item.url).is_ok_and(|url| url.scheme() == "ftp")
+            }) {
+                respond_json(
+                    request,
+                    400,
+                    json!({ "error": "FTP downloads are not supported. Use HTTP, HTTPS, or magnet links." }),
+                    origin.as_deref(),
+                );
+                return;
+            }
             let items = match body
                 .items
                 .into_iter()
@@ -548,6 +559,7 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                 }
                 "start" => {
                     let mut gids = Vec::with_capacity(items.len());
+                    let mut retry_sources = Vec::with_capacity(items.len());
                     for item in &items {
                         match aria2_call(
                             inner,
@@ -555,7 +567,9 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                             vec![json!([item.url]), json!(options_for(item))],
                         ) {
                             Ok(gid) if gid.is_string() => {
-                                gids.push(gid);
+                                let gid = gid.as_str().unwrap_or_default().to_string();
+                                gids.push(gid.clone());
+                                retry_sources.push(json!({ "gid": gid, "uri": item.url }));
                                 let _ = inner.app.emit(
                                     "bridge://started",
                                     json!({ "name": bridge_item_label(item) }),
@@ -575,7 +589,10 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                     let elapsed_ms =
                         request_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
                     record_handoff_timing(&inner.handoff_timings, elapsed_ms);
-                    let _ = inner.app.emit("bridge://added", json!({ "gids": gids }));
+                    let _ = inner.app.emit(
+                        "bridge://added",
+                        json!({ "gids": gids, "sources": retry_sources }),
+                    );
                     respond_json(
                         request,
                         200,
@@ -732,7 +749,7 @@ fn allowed_url(value: &str) -> bool {
         return false;
     };
     match url.scheme() {
-        "http" | "https" | "ftp" => url.host_str().is_some(),
+        "http" | "https" => url.host_str().is_some(),
         "magnet" => url.query().is_some_and(|query| !query.is_empty()),
         _ => false,
     }
@@ -1035,12 +1052,16 @@ mod tests {
         for url in [
             "http://example.com/a",
             "https://example.com/a",
-            "ftp://example.com/a",
             "magnet:?xt=urn:btih:abc",
         ] {
             assert!(allowed_url(url), "{url}");
         }
-        for url in ["file:///tmp/a", "javascript:alert(1)", "data:text/plain,x"] {
+        for url in [
+            "ftp://example.com/a",
+            "file:///tmp/a",
+            "javascript:alert(1)",
+            "data:text/plain,x",
+        ] {
             assert!(!allowed_url(url), "{url}");
         }
         assert!(!allowed_url(&format!(

@@ -22,6 +22,7 @@ import {
   parseTaskColumnWidths,
   resizeTaskColumns,
 } from "@/lib/task-columns";
+import { animateDialogEntrance, prefersReducedMotion } from "@/lib/motion";
 import SelectFilesDialog from "./SelectFilesDialog";
 
 const COLUMN_WIDTHS_KEY = "helios-task-column-widths-v1";
@@ -258,6 +259,8 @@ export default function TaskTable() {
   const [retryVersion, setRetryVersion] = useState(0);
   const [columnWidths, setColumnWidths] = useState(DEFAULT_TASK_COLUMN_WIDTHS);
   const [columnWidthsLoaded, setColumnWidthsLoaded] = useState(false);
+  const confirmBackdropRef = useRef<HTMLDivElement>(null);
+  const confirmDialogRef = useRef<HTMLElement>(null);
   const parentRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const columnDrag = useRef<ColumnDrag | undefined>(undefined);
@@ -379,6 +382,9 @@ export default function TaskTable() {
     )
     .map((row) => row.task);
   const selectedTasks = taskRows.filter((task) => selected.has(task.gid));
+  const failedSelectedTasks = selectedTasks.filter(
+    (task) => task.state === "err"
+  );
   const taskRowsRef = useRef(taskRows);
   const selectedTasksRef = useRef(selectedTasks);
   taskRowsRef.current = taskRows;
@@ -404,7 +410,7 @@ export default function TaskTable() {
       !reset &&
       (rowKeys.length !== previousOrder.current.length ||
         rowKeys.some((key, index) => previousOrder.current[index] !== key));
-    const isReduced = reduceMotion;
+    const isReduced = prefersReducedMotion(reduceMotion);
     const currentKeys = new Set(rowKeys);
     if (reset) positions.current.clear();
     for (const item of virtualizer.getVirtualItems()) {
@@ -482,6 +488,14 @@ export default function TaskTable() {
     },
     []
   );
+  useLayoutEffect(() => {
+    if (!confirmTasks.length) return;
+    return animateDialogEntrance(
+      confirmBackdropRef.current,
+      confirmDialogRef.current,
+      reduceMotion
+    );
+  }, [confirmTasks.length, reduceMotion]);
   useEffect(() => {
     setOfflineTimedOut(false);
     if (!ready || online) return;
@@ -649,7 +663,7 @@ export default function TaskTable() {
     <div className="tbl">
       <div className="task-table-toolbar">
         <span className="lbl">
-          Downloads <span className="download-count">{rows.length}</span>
+          Downloads
         </span>
       </div>
       {selectedTasks.length > 0 && !isHistory && (
@@ -659,6 +673,36 @@ export default function TaskTable() {
           aria-label={`${selectedTasks.length} downloads selected`}
         >
           <span>{selectedTasks.length} selected</span>
+          {failedSelectedTasks.length > 0 && (
+            <button
+              className="secondary-button"
+              disabled={!online}
+              onClick={() =>
+                void run(async () => {
+                  const results = await Promise.allSettled(
+                    failedSelectedTasks.map((task) =>
+                      useStore.getState().retryTask(task)
+                    )
+                  );
+                  const errors = results.flatMap((result, index) =>
+                    result.status === "rejected"
+                      ? [
+                          `${failedSelectedTasks[index].name}: ${
+                            result.reason instanceof Error
+                              ? result.reason.message
+                              : String(result.reason)
+                          }`,
+                        ]
+                      : []
+                  );
+                  if (errors.length) throw new Error(errors.join("\n"));
+                  setSelected(new Set());
+                })
+              }
+            >
+              {failedSelectedTasks.length === 1 ? "Retry" : "Retry failed"}
+            </button>
+          )}
           <button
             className="secondary-button"
             disabled={!online}
@@ -897,12 +941,14 @@ export default function TaskTable() {
       )}
       {confirmTasks.length > 0 && (
         <div
+          ref={confirmBackdropRef}
           className="modal-backdrop"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setConfirmTasks([]);
           }}
         >
           <section
+            ref={confirmDialogRef}
             className="add-dialog remove-dialog"
             role="dialog"
             aria-modal="true"
