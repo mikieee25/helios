@@ -192,10 +192,10 @@ export default function Settings() {
       {num("Downloads", "Download speed limit", "maxDownloadMB", "Unlimited", "MB/s")}{num("Downloads", "Upload speed limit", "maxUploadMB", "Unlimited", "MB/s")}{num("Downloads", "Simultaneous downloads", "maxConcurrent", "5")}{num("Downloads", "Connections per server", "connectionsPerServer", "16")}
       {inTauri && <SettingRow label="Download folder" error={rowErrors.downloadDir} control={<div className="pref-folder"><span title={settings.downloadDir || "Default Downloads folder"}>{settings.downloadDir || "Default"}</span>{settings.downloadDir && <Button variant="ghost" onClick={() => void save("Downloads", { downloadDir: "" })}>Default</Button>}<Button variant="accent" onClick={() => void chooseFolder()}>Choose</Button></div>} />}
     </SettingsSection>
-    <SettingsSection title="Files" badge="New downloads" saved={sectionSaved("Files")} reset={() => reset("Files", ["fileConflict"])}>
+    <SettingsSection title="Files" saved={sectionSaved("Files")} reset={() => reset("Files", ["fileConflict"])}>
       <SettingRow label="If a file exists" error={rowErrors.fileConflict} description={settings.fileConflict === "overwrite" ? <span className="pref-error">Replaces the old file</span> : undefined} control={<Choice label="If a file exists" value={settings.fileConflict} onChange={(value) => void save("Files", { fileConflict: value as SettingsType["fileConflict"] })} options={[["rename", "Rename"], ["overwrite", "Overwrite"], ["error", "Show error"]]} />} />
     </SettingsSection>
-    <SettingsSection title="Network" badge="New downloads" saved={sectionSaved("Network")} reset={() => { setProxy({ proxyMode: DEFAULT_SETTINGS.proxyMode, proxyUrl: "", proxyUser: "", proxyPassword: "", noProxy: "" }); setProxyError(""); reset("Network", ["proxyMode", "proxyUrl", "proxyUser", "proxyPassword", "noProxy"]); }}>
+    <SettingsSection title="Network" saved={sectionSaved("Network")} reset={() => { setProxy({ proxyMode: DEFAULT_SETTINGS.proxyMode, proxyUrl: "", proxyUser: "", proxyPassword: "", noProxy: "" }); setProxyError(""); reset("Network", ["proxyMode", "proxyUrl", "proxyUser", "proxyPassword", "noProxy"]); }}>
       <SettingRow label="Proxy" error={rowErrors.proxyMode} control={<Choice label="Proxy" value={proxy.proxyMode} onChange={(value) => proxyPatch({ proxyMode: value as typeof proxy.proxyMode })} options={[["none", "None"], ["manual", "Manual"]]} />} />
       {proxy.proxyMode === "manual" && <div className="pref-subrows">
         <SettingRow label="Address" error={proxyError || rowErrors.proxyUrl} control={<TextField aria-label="Proxy address" value={proxy.proxyUrl} placeholder="host:3128" onChange={(event) => proxyPatch({ proxyUrl: event.target.value })} />} />
@@ -204,7 +204,7 @@ export default function Settings() {
         <SettingRow label="Bypass list" error={rowErrors.noProxy} control={<TextField aria-label="Bypass list" value={proxy.noProxy} onChange={(event) => proxyPatch({ noProxy: event.target.value })} />} />
       </div>}
     </SettingsSection>
-    <SettingsSection title="Seeding" badge="New downloads" saved={sectionSaved("Seeding")} reset={() => reset("Seeding", ["seedRatio", "seedTimeHours", "neverSeed"])}>
+    <SettingsSection title="Seeding" saved={sectionSaved("Seeding")} reset={() => reset("Seeding", ["seedRatio", "seedTimeHours", "neverSeed"])}>
       {num("Seeding", "Stop at ratio", "seedRatio", "No limit", undefined, settings.neverSeed)}{num("Seeding", "Stop after", "seedTimeHours", "No limit", "hours", settings.neverSeed)}
       <SettingRow label="Never seed" error={rowErrors.neverSeed} control={<Toggle label="Never seed" checked={settings.neverSeed} onChange={(value) => void save("Seeding", { neverSeed: value })} />} />
       {settings.seedRatio === 0 && settings.seedTimeHours === "" && !settings.neverSeed && <div className="pref-row"><div className="pref-label"><small className="pref-error">Seeds forever</small></div></div>}
