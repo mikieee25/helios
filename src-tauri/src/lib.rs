@@ -1,4 +1,5 @@
 mod bridge;
+mod aria_lifecycle;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
@@ -30,6 +31,7 @@ use tauri_plugin_single_instance::init as single_instance;
 struct Aria {
     child: Mutex<Option<CommandChild>>,
     shutting_down: Arc<AtomicBool>,
+    _job: aria_lifecycle::SharedAriaJob,
 }
 
 fn aria2_args(
@@ -637,6 +639,18 @@ pub fn run() {
             // Keep the download session between launches.
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
+            let aria_job = Arc::new(aria_lifecycle::AriaJob::new().map_err(std::io::Error::other)?);
+            let state_dir = data.join("aria2-next-state");
+            std::fs::create_dir_all(&state_dir)?;
+            if let Err(error) = aria_lifecycle::reconcile_existing(&state_dir) {
+                log_diagnostic(log::Level::Error, "aria2", &error);
+                app.dialog()
+                    .message(error.clone())
+                    .title("Previous download engine is still running")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                return Err(std::io::Error::other(error).into());
+            }
             let startup_settings = std::fs::read(data.join("startup.json"))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<StartupSettings>(&bytes).ok())
@@ -658,8 +672,6 @@ pub fn run() {
                     .kind(MessageDialogKind::Warning)
                     .blocking_show();
             }
-            let state_dir = data.join("aria2-next-state");
-            std::fs::create_dir_all(&state_dir)?;
             let s = session.to_string_lossy().to_string();
             let state_path = state_dir.to_string_lossy().to_string();
             let dir = app.path().download_dir()?.to_string_lossy().to_string();
@@ -683,6 +695,11 @@ pub fn run() {
                         continue;
                     }
                 };
+                if let Err(error) = aria_job.assign(child.pid()) {
+                    last_error = error;
+                    let _ = child.kill();
+                    continue;
+                }
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
                 let (armed_tx, armed_rx) = tokio::sync::oneshot::channel();
                 let monitor_app = app.handle().clone();
@@ -692,6 +709,7 @@ pub fn run() {
                 let monitor_dir = dir.clone();
                 let monitor_secret = secret.clone();
                 let monitor_connect_timeout = startup_settings.connect_timeout_seconds;
+                let monitor_job = aria_job.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut ready_tx = Some(ready_tx);
                     let mut listening = false;
@@ -750,6 +768,11 @@ pub fn run() {
                             let Ok((mut replacement_rx, replacement_child)) = monitor_app.shell()
                                 .sidecar("aria2c")
                                 .and_then(|command| command.args(args).spawn()) else { continue; };
+                            if let Err(error) = monitor_job.assign(replacement_child.pid()) {
+                                log_diagnostic(log::Level::Error, "aria2", &error);
+                                let _ = replacement_child.kill();
+                                continue;
+                            }
                             let ready = tokio::time::timeout(Duration::from_secs(5), async {
                                 while let Some(event) = replacement_rx.recv().await {
                                     match event {
@@ -807,7 +830,7 @@ pub fn run() {
                     .blocking_show();
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, message).into());
             };
-            app.manage(Aria { child: Mutex::new(Some(child)), shutting_down: setup_shutting_down.clone() });
+            app.manage(Aria { child: Mutex::new(Some(child)), shutting_down: setup_shutting_down.clone(), _job: aria_job });
             app.manage(RpcConfig { port, secret: secret.clone() });
             let bridge = bridge::BridgeService::start(
                 app_handle.clone(),
