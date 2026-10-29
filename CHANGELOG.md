@@ -2,6 +2,19 @@
 
 Notable Helios changes, newest first.
 
+## [0.1.5] - 2026-10-29
+
+### Added
+
+- Added a Stop seeding action that moves stopped torrents to Completed.
+
+### Fixed
+
+- Persisted removed downloads and active seeding torrents across restarts.
+- Corrected selected torrent file handling and displayed torrent sizes.
+- Added useful aria2 RPC failure details to browser bridge diagnostics.
+- Hid scrollbars in the torrent file selection dialog.
+
 ## [0.1.4] - 2026-10-29
 
 ### Added
@@ -59,6 +72,7 @@ Notable Helios changes, newest first.
 - Initial Helios desktop release for managing direct downloads and BitTorrent transfers.
 - Torrent file selection, download controls, system tray support, and Windows release packaging.
 
+[0.1.5]: https://github.com/mikieee25/helios/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/mikieee25/helios/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/mikieee25/helios/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/mikieee25/helios/compare/v0.1.1...v0.1.2

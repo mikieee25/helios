@@ -439,7 +439,7 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                         .and_then(|v| v.parse::<u64>().ok())
                         .unwrap_or(0),
                 ),
-                Err(()) => (false, 0, 0, 0),
+                Err(_) => (false, 0, 0, 0),
             };
             respond_json(
                 request,
@@ -575,11 +575,22 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                                     json!({ "name": bridge_item_label(item) }),
                                 );
                             }
-                            _ => {
+                            Ok(_) => {
+                                eprintln!("[browser-bridge] aria2.addUri failed: response did not contain a GID");
                                 respond_json(
                                     request,
                                     502,
-                                    json!({ "error": "Could not add downloads" }),
+                                    json!({ "error": "Could not add downloads", "code": "aria2_add_failed" }),
+                                    origin.as_deref(),
+                                );
+                                return;
+                            }
+                            Err(error) => {
+                                eprintln!("[browser-bridge] aria2.addUri failed: {error}");
+                                respond_json(
+                                    request,
+                                    502,
+                                    json!({ "error": "Could not add downloads", "code": "aria2_add_failed" }),
                                     origin.as_deref(),
                                 );
                                 return;
@@ -933,7 +944,37 @@ fn persist_clients(path: &PathBuf, clients: &[ClientRecord]) -> std::io::Result<
     fs::write(path, bytes)
 }
 
-fn aria2_call(inner: &BridgeInner, method: &str, params: Vec<Value>) -> Result<Value, ()> {
+#[derive(Debug)]
+enum Aria2CallError {
+    Transport,
+    RequestSerialization,
+    InvalidResponse,
+    Rpc { code: Option<i64> },
+    MissingResult,
+}
+
+impl std::fmt::Display for Aria2CallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport => formatter.write_str("RPC transport failed"),
+            Self::RequestSerialization => {
+                formatter.write_str("RPC request could not be serialized")
+            }
+            Self::InvalidResponse => formatter.write_str("RPC response was not valid JSON"),
+            Self::Rpc { code: Some(code) } => {
+                write!(formatter, "aria2 returned RPC error code {code}")
+            }
+            Self::Rpc { code: None } => formatter.write_str("aria2 returned an RPC error"),
+            Self::MissingResult => formatter.write_str("RPC response did not contain a result"),
+        }
+    }
+}
+
+fn aria2_call(
+    inner: &BridgeInner,
+    method: &str,
+    params: Vec<Value>,
+) -> Result<Value, Aria2CallError> {
     let mut params = params;
     params.insert(0, json!(format!("token:{}", inner.rpc_secret)));
     let body = serde_json::to_string(&json!({
@@ -942,19 +983,27 @@ fn aria2_call(inner: &BridgeInner, method: &str, params: Vec<Value>) -> Result<V
         "method": method,
         "params": params,
     }))
-    .map_err(|_| ())?;
+    .map_err(|_| Aria2CallError::RequestSerialization)?;
     let response = inner
         .agent
         .post(&format!("http://127.0.0.1:{}/jsonrpc", inner.rpc_port))
         .set("Content-Type", "application/json")
         .send_string(&body)
-        .map_err(|_| ())?;
-    let response = response.into_string().map_err(|_| ())?;
-    let value: Value = serde_json::from_str(&response).map_err(|_| ())?;
-    if value.get("error").is_some() {
-        return Err(());
+        .map_err(|_| Aria2CallError::Transport)?;
+    let response = response
+        .into_string()
+        .map_err(|_| Aria2CallError::InvalidResponse)?;
+    let value: Value =
+        serde_json::from_str(&response).map_err(|_| Aria2CallError::InvalidResponse)?;
+    if let Some(error) = value.get("error") {
+        return Err(Aria2CallError::Rpc {
+            code: error.get("code").and_then(Value::as_i64),
+        });
     }
-    value.get("result").cloned().ok_or(())
+    value
+        .get("result")
+        .cloned()
+        .ok_or(Aria2CallError::MissingResult)
 }
 
 fn unix_now() -> u64 {

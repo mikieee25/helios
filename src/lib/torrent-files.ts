@@ -6,6 +6,10 @@ export type TorrentFile = {
   selected: boolean;
 };
 
+export function isTorrentFileSelected(value: unknown) {
+  return value === true || value === "true";
+}
+
 export function formatFileIndexes(files: TorrentFile[]) {
   return files.map((file) => file.index).join(",");
 }

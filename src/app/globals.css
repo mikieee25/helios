@@ -1673,8 +1673,16 @@ svg.i {
   opacity: 0.65;
   cursor: wait;
 }
+.select-files-dialog,
+.select-files-dialog * {
+  scrollbar-width: none;
+}
 .select-files-dialog {
   width: min(760px, 100%);
+}
+.select-files-dialog::-webkit-scrollbar,
+.select-files-dialog *::-webkit-scrollbar {
+  display: none;
 }
 .file-search {
   display: grid;
@@ -1714,6 +1722,9 @@ svg.i {
   border-radius: 9px;
   scrollbar-width: thin;
   scrollbar-color: var(--chip) transparent;
+}
+.select-files-dialog .torrent-file-list {
+  scrollbar-width: none;
 }
 .torrent-file-list > div {
   position: relative;

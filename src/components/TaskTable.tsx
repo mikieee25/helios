@@ -117,10 +117,13 @@ const Row = memo(function Row({
               className="st"
               disabled={disabled}
               aria-label={
-                t.state === "pa" && !t.queued
+                t.state === "seed"
+                  ? `Stop seeding ${t.name}`
+                  : t.state === "pa" && !t.queued
                   ? "Resume download"
                   : "Pause download"
               }
+              title={t.state === "seed" ? "Stop seeding" : undefined}
               onClick={(event) => {
                 event.stopPropagation();
                 onToggle(t);
@@ -406,6 +409,9 @@ export default function TaskTable() {
     )
     .map((row) => row.task);
   const selectedTasks = taskRows.filter((task) => selected.has(task.gid));
+  const stoppingSeeding =
+    selectedTasks.length > 0 &&
+    selectedTasks.every((task) => task.state === "seed");
   const failedSelectedTasks = selectedTasks.filter(
     (task) => task.state === "err"
   );
@@ -917,7 +923,7 @@ export default function TaskTable() {
             disabled={!online}
             onClick={() => runSelection(true)}
           >
-            Pause
+            {stoppingSeeding ? "Stop seeding" : "Pause"}
           </button>
           <button
             className="secondary-button"
@@ -1111,9 +1117,11 @@ export default function TaskTable() {
                 void run(() => useStore.getState().toggle(menu.task))
               }
             >
-              {menu.task.state === "pa" && !menu.task.queued
-                ? "Resume"
-                : "Pause"}
+              {menu.task.state === "seed"
+                ? "Stop seeding"
+                : menu.task.state === "pa" && !menu.task.queued
+                  ? "Resume"
+                  : "Pause"}
             </button>
           )}
           {menu.task.state === "err" && (

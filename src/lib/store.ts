@@ -11,7 +11,11 @@ import * as historyStore from "./history";
 import type { HistoryEntry } from "./history";
 import { dominantCategory, fileCategory, type FileCategory } from "./format";
 import { readValue, writeValue } from "./persistence";
-import { selectionTotals, type TorrentFile } from "./torrent-files";
+import {
+  isTorrentFileSelected,
+  selectionTotals,
+  type TorrentFile,
+} from "./torrent-files";
 import { redactDiagnostics } from "./diagnostics";
 import { reconcileTaskSnapshot } from "./task-snapshot";
 import { taskActionForAria2Status } from "./task-actions";
@@ -261,6 +265,8 @@ let aria2DefaultDir: string | undefined;
 const seen = new Map<string, number>();
 const pendingCompletions = new Set<string>();
 const completing = new Set<string>();
+const persistedSeedGids = new Set<string>();
+const savedTorrentCompletionGids = new Set<string>();
 const same = (a: Task, b: Task) =>
   (Object.keys(a) as (keyof Task)[]).every((k) =>
     k === "files"
@@ -288,27 +294,53 @@ function toTask(r: any): Task | undefined {
       path: file.path ?? "",
       length: +file.length || 0,
       completedLength: +file.completedLength || 0,
-      selected: file.selected === "true",
+      selected: isTorrentFileSelected(file.selected),
     })
   );
   const selectedTotals = selectionTotals(files);
-  const size = torrent && files.length ? selectedTotals.size : +r.totalLength;
-  const completed =
-    torrent && files.length ? selectedTotals.completed : +r.completedLength;
   const st: string = r.status;
+  const seeder = isTorrentFileSelected(r.seeder);
+  const allFileTotals = files.reduce(
+    (totals, file) => ({
+      size: totals.size + file.length,
+      completed: totals.completed + file.completedLength,
+    }),
+    { size: 0, completed: 0 }
+  );
+  const selectedTorrentTotals = selectedTotals.size
+    ? selectedTotals
+    : allFileTotals;
+  const completedTorrent =
+    torrent &&
+    selectedTorrentTotals.size > 0 &&
+    selectedTorrentTotals.completed >= selectedTorrentTotals.size;
   const state: UiState | undefined =
     st === "complete"
       ? "done"
       : st === "error"
         ? "err"
         : st === "active"
-          ? r.seeder === "true"
+          ? seeder
             ? "seed"
             : "dl"
-          : st === "paused" || st === "waiting"
-            ? "pa"
-            : undefined;
+          : st === "paused" && completedTorrent
+            ? "done"
+            : st === "paused" || st === "waiting"
+              ? "pa"
+              : undefined;
   if (!state) return undefined;
+  const torrentTotals =
+    torrent && files.length
+      ? selectedTotals.size
+        ? selectedTotals
+        : seeder
+          ? allFileTotals
+          : undefined
+      : undefined;
+  const size = torrentTotals?.size || +r.totalLength;
+  const completed = seeder
+    ? size
+    : torrentTotals?.completed ?? +r.completedLength;
   const paths = files.map((file) => file.path);
   const name = r.bittorrent?.info?.name ?? paths[0]?.split(/[\\/]/).pop() ?? "";
   if (state === "dl" && !seen.has(r.gid)) seen.set(r.gid, Date.now());
@@ -482,7 +514,7 @@ export const useStore = create<S>((set, get) => {
                   path: String(file.path ?? ""),
                   length: +file.length || 0,
                   completedLength: +file.completedLength || 0,
-                  selected: file.selected === "true",
+                  selected: isTorrentFileSelected(file.selected),
                 }))
               );
             } catch {
@@ -512,6 +544,41 @@ export const useStore = create<S>((set, get) => {
         [...taskByGid.values()],
         shouldFetchStopped
       );
+      const newSeeds = tasks.filter(
+        (task) => task.state === "seed" && !persistedSeedGids.has(task.gid)
+      );
+      const enabledSeeds: string[] = [];
+      for (const task of newSeeds) {
+        try {
+          await client.call("changeOption", task.gid, { "force-save": "true" });
+          enabledSeeds.push(task.gid);
+        } catch {
+          recordDiagnosticError("Could not enable seeding session persistence");
+        }
+      }
+      if (enabledSeeds.length) {
+        try {
+          await client.call("saveSession");
+          enabledSeeds.forEach((gid) => persistedSeedGids.add(gid));
+        } catch {
+          recordDiagnosticError("Could not save seeding downloads to the startup session");
+        }
+      }
+      for (const task of tasks) {
+        if (
+          task.state !== "done" ||
+          !task.torrent ||
+          get().history.some((entry) => entry.id === task.gid) ||
+          savedTorrentCompletionGids.has(task.gid)
+        )
+          continue;
+        try {
+          await saveCompletion(task, false);
+          savedTorrentCompletionGids.add(task.gid);
+        } catch {
+          recordDiagnosticError("Could not save completed torrent to history");
+        }
+      }
       const completedSources = tasks
         .filter((task) => task.state === "done" && retrySources[task.gid])
         .map((task) => task.gid);
@@ -568,7 +635,7 @@ export const useStore = create<S>((set, get) => {
     }
   }
 
-  async function saveCompletion(task: Task) {
+  async function saveCompletion(task: Task, notify = true) {
     const entry: HistoryEntry = {
       id: task.gid,
       name: task.name,
@@ -580,7 +647,7 @@ export const useStore = create<S>((set, get) => {
     };
     const result = await historyStore.add(entry);
     set({ history: result.entries });
-    if (!result.added) return;
+    if (!result.added || !notify) return;
     try {
       if (get().notify && get().settings.notifyFinished) {
         if (inTauri()) {
@@ -895,6 +962,10 @@ export const useStore = create<S>((set, get) => {
         );
         const method = taskActionForAria2Status(status);
         if (method) await api.call(method, t.gid);
+        if (t.state === "seed" && method === "pause") {
+          await saveCompletion({ ...t, state: "done", done: 1 }, false);
+          await api.call("saveSession");
+        }
       } catch (error) {
         const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
         if (
@@ -972,7 +1043,7 @@ export const useStore = create<S>((set, get) => {
         path: String(file.path ?? ""),
         length: +file.length || 0,
         completedLength: +file.completedLength || 0,
-        selected: file.selected === "true",
+        selected: isTorrentFileSelected(file.selected),
       }));
     },
     async torrentFollowedBy(gid) {
@@ -1137,6 +1208,16 @@ export const useStore = create<S>((set, get) => {
         }
       } finally {
         void refresh(true);
+      }
+      if (api) {
+        try {
+          await api.call("saveSession");
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Download removed, but Helios could not save the updated startup session: ${detail}`
+          );
+        }
       }
       await forgetRetrySources([task.gid]);
       if (alsoDeleteFiles && !task.files.some((file) => file.path))
