@@ -1,4 +1,5 @@
 import { gsap } from "gsap";
+import { useStore } from "./store";
 
 export function prefersReducedMotion(setting: boolean): boolean {
   return (
@@ -76,3 +77,7 @@ export function animateDialogExit(
   );
   return () => timeline.kill();
 }
+
+/** True unless Reduce motion is on in Settings or the OS asks for less motion. */
+export const motionOn = () =>
+  !prefersReducedMotion(useStore.getState().settings.reduceMotion);

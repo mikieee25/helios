@@ -674,19 +674,12 @@ svg.i {
 .task-scroll.compact .virtual-row > .row {
   height: 36px;
 }
-.history-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 8px 0;
-}
-.history-actions button,
 .settings-heading > button,
 .folder-choice button {
   color: var(--cy);
   padding: 7px 10px;
   border-radius: 7px;
 }
-.history-actions button:hover,
 .settings-heading > button:hover,
 .folder-choice button:hover {
   background: var(--sel);

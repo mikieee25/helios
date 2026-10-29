@@ -11,10 +11,11 @@ import { Button, NumberField, SelectField, SettingRow, SettingsSection, TextFiel
 import { redactDiagnostics } from "@/lib/diagnostics";
 import { installUpdate } from "@/lib/updater";
 import { animateDialogEntrance } from "@/lib/motion";
+import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 
 type BridgeState = { enabled: boolean; port: number; paired: boolean; pairingCode: string | null; pairingExpiresAt: number | null };
 type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: number | null };
-type Section = "Downloads" | "Files" | "Network" | "Seeding" | "Notifications" | "Browser integration" | "Behavior" | "Appearance" | "App" | "Advanced";
+type Section = "Downloads" | "Files" | "Network" | "Seeding" | "Notifications" | "Browser integration" | "Behavior" | "Appearance" | "Keyboard shortcuts" | "App" | "Advanced";
 
 function Choice({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: [string, string][] }) {
   return <SelectField label={label} value={value} onChange={onChange} options={options} />;
@@ -222,6 +223,9 @@ export default function Settings() {
       <SettingRow label="Theme" error={rowErrors.theme} control={<Choice label="Theme" value={settings.theme} onChange={(value) => void save("Appearance", { theme: value as SettingsType["theme"] })} options={[["system", "System"], ["dark", "Dark"], ["light", "Light"]]} />} />
       <SettingRow label="Compact list" error={rowErrors.compactList} control={<Toggle label="Compact list" checked={settings.compactList} onChange={(value) => void save("Appearance", { compactList: value })} />} />
       <SettingRow label="Reduce motion" error={rowErrors.reduceMotion} control={<Toggle label="Reduce motion" checked={settings.reduceMotion} onChange={(value) => void save("Appearance", { reduceMotion: value })} />} />
+    </SettingsSection>
+    <SettingsSection title="Keyboard shortcuts" saved={sectionSaved("Keyboard shortcuts")} reset={() => reset("Keyboard shortcuts", ["keyBindings"])}>
+      <KeyboardShortcuts bindings={settings.keyBindings} onChange={(keyBindings) => save("Keyboard shortcuts", { keyBindings })} error={rowErrors.keyBindings} />
     </SettingsSection>
     {inTauri && <SettingsSection title="App" saved={sectionSaved("App")} reset={() => void resetApp()}>
       <SettingRow label="Start with Windows" error={rowErrors.startWithWindows} control={<Toggle label="Start with Windows" checked={settings.startWithWindows} onChange={(value) => void setAutostartPreference(value)} />} />

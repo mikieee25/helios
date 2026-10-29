@@ -1,18 +1,19 @@
 "use client";
 import { useStore } from "@/lib/store";
-import { mb, eta, dur } from "@/lib/format";
+import { eta, dur } from "@/lib/format";
 import { Ic } from "./Icon";
+import AnimatedNumber from "./AnimatedNumber";
 
 export default function Stats() {
   const t = useStore((s) => s.tasks.find((x) => x.gid === s.sel) ?? s.tasks[0]);
   const dl = useStore((s) => s.dl);
   const up = useStore((s) => s.up);
   const got = t ? t.size * t.done : 0;
-  const cells: [string, string][] = [
+  const cells: [string, React.ReactNode][] = [
     ["Seeds", t ? String(t.seeds) : "—"],
     ["Down / up ratio", t && got ? (t.upTotal / got).toFixed(1) : "0.0"],
-    ["Downloaded", `${t ? Math.round(got / 1048576) : 0} MB`],
-    ["Uploaded", `${t ? Math.round(t.upTotal / 1048576) : 0} MB`],
+    ["Downloaded", <><AnimatedNumber value={t ? got / 1048576 : 0} /> MB</>],
+    ["Uploaded", <><AnimatedNumber value={t ? t.upTotal / 1048576 : 0} /> MB</>],
     ["Time elapsed", t ? dur(Math.floor((Date.now() - t.since) / 1000)) : "—"],
     ["Time left", t?.state === "dl" ? eta((t.size - got) / t.speed) : "—"],
   ];
@@ -24,12 +25,12 @@ export default function Stats() {
       <div className="big">
         <div>
           <Ic n="down" />
-          {mb(dl)}
+          <AnimatedNumber value={dl / 1048576} decimals={1} />
           <small>MB</small>
         </div>
         <div>
           <Ic n="up" />
-          {mb(up)}
+          <AnimatedNumber value={up / 1048576} decimals={1} />
           <small>MB</small>
         </div>
       </div>

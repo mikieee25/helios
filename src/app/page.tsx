@@ -15,10 +15,13 @@ import Chart, { SeriesToggle } from "@/components/Chart";
 import Stats from "@/components/Stats";
 import Settings from "@/components/Settings";
 import AddDialog from "@/components/AddDialog";
+import DetailsPanel from "@/components/DetailsPanel";
+import Toast from "@/components/Toast";
 import SelectFilesDialog from "@/components/SelectFilesDialog";
 import type { BridgeAddItem } from "@/lib/bridge";
 import { isSupportedDownloadSource } from "@/lib/download-source";
 import { prefersReducedMotion } from "@/lib/motion";
+import { shortcutMatches } from "@/lib/shortcuts";
 
 type SelectionRequest = {
   gid: string;
@@ -241,7 +244,7 @@ export default function Page() {
         );
     }
     const onShortcut = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
+      if (shortcutMatches(e, "newDownload", useStore.getState().settings.keyBindings)) {
         e.preventDefault();
         setAddOpen(true);
       }
@@ -297,8 +300,10 @@ export default function Page() {
               </div>
             </>
           )}
+          {view !== "settings" && <DetailsPanel />}
         </main>
       </div>
+      <Toast />
     </div>
   );
 }

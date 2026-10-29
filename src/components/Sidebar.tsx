@@ -3,8 +3,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
 import { useStore, Filter } from "@/lib/store";
 import { buildOverview } from "@/lib/overview";
+import { motionOn } from "@/lib/motion";
 import { Ic } from "./Icon";
-import { prefersReducedMotion } from "@/lib/motion";
 
 const NAV: [Filter, string, string][] = [
   ["all", "home", "Overview"],
@@ -34,79 +34,14 @@ export default function Sidebar() {
   const completedCount = counts[3];
   const [dark, setDark] = useState(true);
   const sideRef = useRef<HTMLElement>(null);
-  const activeTabRef = useRef<HTMLSpanElement>(null);
-  const previousActiveRef = useRef<Element | null>(null);
+  const pillRef = useRef<HTMLSpanElement>(null);
+  const pillPlaced = useRef(false);
   const seedingBadge = useRef<HTMLSpanElement>(null);
   const completedBadge = useRef<HTMLSpanElement>(null);
   const previousStatusCounts = useRef<{
     seeding: number;
     completed: number;
   } | null>(null);
-
-  useLayoutEffect(() => {
-    const side = sideRef.current;
-    const indicator = activeTabRef.current;
-    const active = side?.querySelector(".nav button.on, .set > button.on");
-    if (!side || !indicator || !active) return;
-
-    const move = (animate: boolean) => {
-      const sideRect = side.getBoundingClientRect();
-      const activeRect = active.getBoundingClientRect();
-      const position = {
-        x: activeRect.left - sideRect.left,
-        y: activeRect.top - sideRect.top,
-        width: activeRect.width,
-        height: activeRect.height,
-        autoAlpha: 1,
-      };
-      const previous = previousActiveRef.current;
-      if (!previous || !animate || prefersReducedMotion(reduceMotion)) {
-        gsap.set(indicator, position);
-      } else {
-        gsap.to(indicator, {
-          ...position,
-          duration: 0.32,
-          ease: "power3.out",
-          overwrite: true,
-        });
-      }
-      previousActiveRef.current = active;
-    };
-
-    move(true);
-    return () => {
-      gsap.killTweensOf(indicator);
-    };
-  }, [filter, view, reduceMotion]);
-
-  useLayoutEffect(() => {
-    const side = sideRef.current;
-    const indicator = activeTabRef.current;
-    if (!side || !indicator) return;
-
-    const syncPosition = () => {
-      const active = side.querySelector(".nav button.on, .set > button.on");
-      if (!active) return;
-      const sideRect = side.getBoundingClientRect();
-      const activeRect = active.getBoundingClientRect();
-      gsap.killTweensOf(indicator);
-      gsap.set(indicator, {
-        x: activeRect.left - sideRect.left,
-        y: activeRect.top - sideRect.top,
-        width: activeRect.width,
-        height: activeRect.height,
-        autoAlpha: 1,
-      });
-      previousActiveRef.current = active;
-    };
-    const observer = new ResizeObserver(syncPosition);
-    observer.observe(side);
-    window.addEventListener("resize", syncPosition);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", syncPosition);
-    };
-  }, []);
 
   useEffect(() => {
     const previous = previousStatusCounts.current;
@@ -116,7 +51,7 @@ export default function Sidebar() {
     };
     if (
       !previous ||
-      prefersReducedMotion(reduceMotion)
+      reduceMotion
     ) {
       return;
     }
@@ -144,6 +79,60 @@ export default function Sidebar() {
     };
   }, [seedingCount, completedCount, reduceMotion]);
 
+  // The active-item highlight glides between sidebar items instead of jumping.
+  useLayoutEffect(() => {
+    const side = sideRef.current;
+    const pill = pillRef.current;
+    if (!side || !pill) return;
+    const place = (animate: boolean) => {
+      gsap.killTweensOf(pill);
+      const button = side.querySelector<HTMLElement>(
+        view === "tasks" ? ".nav button.on" : ".set > button.on"
+      );
+      if (!button) {
+        gsap.set(pill, { autoAlpha: 0 });
+        return;
+      }
+      const sideRect = side.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+      const box = {
+        x: buttonRect.left - sideRect.left,
+        y: buttonRect.top - sideRect.top,
+        width: buttonRect.width,
+        height: buttonRect.height,
+        autoAlpha: 1,
+      };
+      if (!animate || !pillPlaced.current || !motionOn()) {
+        gsap.set(pill, box);
+        pillPlaced.current = true;
+      } else {
+        gsap.to(pill, {
+          ...box,
+          duration: 0.24,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
+    };
+    place(true);
+    let firstObservation = true;
+    const observer = new ResizeObserver(() => {
+      if (firstObservation) {
+        firstObservation = false;
+        return;
+      }
+      place(false);
+    });
+    observer.observe(side);
+    side
+      .querySelectorAll(".nav > button, .set > button")
+      .forEach((button) => observer.observe(button));
+    return () => {
+      observer.disconnect();
+      gsap.killTweensOf(pill);
+    };
+  }, [filter, view]);
+
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
@@ -158,7 +147,7 @@ export default function Sidebar() {
 
   return (
     <aside ref={sideRef} className="side">
-      <span ref={activeTabRef} className="side-active-tab" aria-hidden="true" />
+      <span className="side-active-tab" ref={pillRef} aria-hidden="true" />
       <div className="lbl">Overview</div>
       <nav className="nav">
         {NAV.map(([f, icon, label], i) => (

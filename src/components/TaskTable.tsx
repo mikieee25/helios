@@ -24,9 +24,16 @@ import {
 } from "@/lib/task-columns";
 import { animateDialogEntrance, prefersReducedMotion } from "@/lib/motion";
 import SelectFilesDialog from "./SelectFilesDialog";
+import SearchBox from "./SearchBox";
+import { useView, type SortKey } from "@/lib/view-state";
+import { applyRowView } from "@/lib/row-view";
+import { removeTasks } from "@/lib/remove-undo";
+import { useToast } from "@/lib/toast";
+import { shortcutMatches } from "@/lib/shortcuts";
 
 const COLUMN_WIDTHS_KEY = "helios-task-column-widths-v1";
 const COLUMN_LABELS = ["NAME", "PROGRESS", "SIZE", "TIME LEFT", "SEEDS", "PEERS"];
+const SORT_KEYS: SortKey[] = ["name", "progress", "size", "time", "seeds", "peers"];
 type ColumnDrag = {
   index: number;
   pointerId: number;
@@ -44,6 +51,7 @@ type RowProps = {
   onReveal(task: Task): void;
   onOpen(task: Task): void;
   onSelectFiles(task: Task): void;
+  onDetails(task: Task): void;
   onSelect(gid: string, event: ReactMouseEvent): void;
   onContext(event: React.MouseEvent, task: Task): void;
   disabled?: boolean;
@@ -58,6 +66,7 @@ const Row = memo(function Row({
   onReveal,
   onOpen,
   onSelectFiles,
+  onDetails,
   onSelect,
   onContext,
   disabled = false,
@@ -85,7 +94,9 @@ const Row = memo(function Row({
           : undefined
       }
       onClick={(event) => onSelect(t.gid, event)}
-      onDoubleClick={() => !disabled && t.state === "done" && onOpen(t)}
+      onDoubleClick={() =>
+        t.state === "done" ? !disabled && onOpen(t) : onDetails(t)
+      }
       onContextMenu={(event) => onContext(event, t)}
     >
       <div className="nm">
@@ -271,6 +282,12 @@ export default function TaskTable() {
   const previousLayout = useRef("");
   const laidOut = useRef(false);
   const anchor = useRef<string | undefined>(undefined);
+  const cursor = useRef<string | undefined>(undefined);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const previousKinds = useRef(new Map<string, string>());
+  const previousSort = useRef("");
+  const query = useView((s) => s.query);
+  const sort = useView((s) => s.sort);
   const tasks = useStore((s) => s.tasks);
   const history = useStore((s) => s.history);
   const filter = useStore((s) => s.filter);
@@ -286,6 +303,9 @@ export default function TaskTable() {
   const view = useStore((s) => s.view);
   const sel = useStore((s) => s.sel ?? s.tasks[0]?.gid);
   const isHistory = filter === "done";
+  useEffect(() => {
+    useView.getState().hydrateSort();
+  }, []);
   useEffect(() => {
     try {
       setColumnWidths(
@@ -361,7 +381,10 @@ export default function TaskTable() {
     setSelected(new Set());
     anchor.current = undefined;
   }, [filter, category]);
-  const rows: OverviewRow[] =
+  useEffect(() => {
+    parentRef.current?.scrollTo(0, 0);
+  }, [query]);
+  const baseRows: OverviewRow[] =
     filter === "all"
       ? buildOverview(tasks, history, category)
       : isHistory
@@ -375,6 +398,7 @@ export default function TaskTable() {
                 (!category || task.category === category)
             )
             .map((task) => ({ kind: "task", task }));
+  const rows = applyRowView(baseRows, query, sort);
   const taskRows = rows
     .filter(
       (row): row is Extract<OverviewRow, { kind: "task" }> =>
@@ -399,7 +423,7 @@ export default function TaskTable() {
     },
     overscan: 6,
   });
-  const layoutSignature = `${filter}\0${category ?? ""}\0${view}`;
+  const layoutSignature = `${filter}\0${category ?? ""}\0${view}\0${query}`;
   const rowKeys = rows.map((row) =>
     row.kind === "task" ? row.task.gid : row.entry.id
   );
@@ -411,6 +435,8 @@ export default function TaskTable() {
       (rowKeys.length !== previousOrder.current.length ||
         rowKeys.some((key, index) => previousOrder.current[index] !== key));
     const isReduced = prefersReducedMotion(reduceMotion);
+    const sortSignature = sort ? `${sort.key}:${sort.dir}` : "";
+    const sortChanged = !reset && previousSort.current !== sortSignature;
     const currentKeys = new Set(rowKeys);
     if (reset) positions.current.clear();
     for (const item of virtualizer.getVirtualItems()) {
@@ -418,6 +444,10 @@ export default function TaskTable() {
       const key = row.kind === "task" ? row.task.gid : row.entry.id;
       const element = rowRefs.current.get(key);
       if (!element) continue;
+      const completedNow =
+        !reset &&
+        row.kind === "history" &&
+        previousKinds.current.get(key) === "task";
       const previous = positions.current.get(key);
       const moved =
         !reset &&
@@ -429,7 +459,7 @@ export default function TaskTable() {
         item.start,
         moved && !isReduced ? previous : undefined
       );
-      if (moved && !isReduced) {
+      if (moved && !isReduced && !sortChanged && !completedNow) {
         const rowElement = element.firstElementChild as HTMLElement | null;
         if (rowElement) {
           gsap.fromTo(
@@ -462,6 +492,21 @@ export default function TaskTable() {
           }
         );
       }
+      if (completedNow && !isReduced && inner) {
+        // A download just finished: a soft green wash plus a quick bar pulse.
+        gsap.fromTo(
+          inner,
+          { "--flash": 1 },
+          { "--flash": 0, duration: 1.1, ease: "power2.out", overwrite: "auto", clearProps: "--flash" }
+        );
+        const bar = inner.querySelector(".trk");
+        if (bar)
+          gsap.fromTo(
+            bar,
+            { scaleY: 1 },
+            { scaleY: 2.4, duration: 0.2, yoyo: true, repeat: 1, ease: "power2.out", clearProps: "transform" }
+          );
+      }
       positions.current.set(key, item.start);
     }
     const scroller = parentRef.current;
@@ -476,6 +521,13 @@ export default function TaskTable() {
     previousKeys.current = currentKeys;
     previousOrder.current = rowKeys;
     previousLayout.current = layoutSignature;
+    previousSort.current = sortSignature;
+    previousKinds.current = new Map(
+      rows.map((row) => [
+        row.kind === "task" ? row.task.gid : row.entry.id,
+        row.kind,
+      ])
+    );
     laidOut.current = true;
   });
   useEffect(
@@ -502,9 +554,12 @@ export default function TaskTable() {
     const timer = setTimeout(() => setOfflineTimedOut(true), 10_000);
     return () => clearTimeout(timer);
   }, [ready, online, retryVersion]);
-  const emptyText = isHistory
-    ? "No completed downloads yet."
-    : "Nothing here yet. Paste a link anywhere to start a download.";
+  const emptyText =
+    query.trim() && baseRows.length
+      ? `No downloads match “${query.trim()}”.`
+      : isHistory
+        ? "No completed downloads yet."
+        : "Nothing here yet. Paste a link anywhere to start a download.";
   const hasOfflineTasks = !online && taskRows.length > 0;
   const showEngineState = !online && !rows.length && !isHistory;
 
@@ -539,8 +594,8 @@ export default function TaskTable() {
       return;
     }
     void run(async () => {
-      await Promise.all(items.map((task) => useStore.getState().removeTask(task, deleteFilesByDefault)));
       setSelected(new Set());
+      await removeTasks(items, deleteFilesByDefault);
     });
   };
 
@@ -572,6 +627,7 @@ export default function TaskTable() {
     });
   const open = (task: Task) => openFile(task.files[0]?.path ?? "");
   const selectRow = (gid: string, event: ReactMouseEvent) => {
+    cursor.current = gid;
     const index = taskRows.findIndex((task) => task.gid === gid);
     const anchorIndex = anchor.current
       ? taskRows.findIndex((task) => task.gid === anchor.current)
@@ -613,12 +669,12 @@ export default function TaskTable() {
       )
         return;
       if (isHistory) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+      if (shortcutMatches(event, "selectAll", useStore.getState().settings.keyBindings)) {
         event.preventDefault();
         const visible = taskRowsRef.current;
         setSelected(new Set(visible.map((task) => task.gid)));
         anchor.current = visible[0]?.gid;
-      } else if (event.key === "Delete" && selectedTasksRef.current.length) {
+      } else if (shortcutMatches(event, "removeSelected", useStore.getState().settings.keyBindings) && selectedTasksRef.current.length) {
         if (!online) return;
         event.preventDefault();
         requestRemoval(selectedTasksRef.current);
@@ -641,18 +697,157 @@ export default function TaskTable() {
     });
   const confirmRemove = () =>
     void run(async () => {
-      const errors: string[] = [];
-      for (const task of confirmTasks) {
-        try {
-          await useStore.getState().removeTask(task, deleteFiles);
-        } catch (error) {
-          errors.push(error instanceof Error ? error.message : String(error));
-        }
-      }
+      const items = confirmTasks;
       setConfirmTasks([]);
       setSelected(new Set());
-      if (errors.length) throw new Error(errors.join("\n"));
+      await removeTasks(items, deleteFiles);
     });
+  const showDetails = (task: Task) => {
+    cursor.current = task.gid;
+    useStore.getState().select(task.gid);
+    useView.getState().setDetailsOpen(true);
+  };
+  const primary =
+    taskRows.find((task) => task.gid === (cursor.current ?? sel)) ??
+    selectedTasks[0] ??
+    taskRows.find((task) => task.gid === sel);
+  const toggleTargets = () => {
+    const targets = selectedTasks.length ? selectedTasks : primary ? [primary] : [];
+    const active = (task: Task) =>
+      task.state === "dl" || task.state === "seed" || task.queued;
+    const anyActive = targets.some(active);
+    void run(() =>
+      Promise.all(
+        targets
+          .filter((task) =>
+            anyActive ? active(task) : task.state === "pa" && !task.queued
+          )
+          .map((task) => useStore.getState().toggle(task))
+      )
+    );
+  };
+  const commitSearch = () => {
+    searchRef.current?.blur();
+    const first = taskRows[0];
+    if (!first) return;
+    setSelected(new Set([first.gid]));
+    anchor.current = first.gid;
+    cursor.current = first.gid;
+    useStore.getState().select(first.gid);
+  };
+  const kb = useRef({
+    taskRows,
+    selectedCount: selected.size,
+    isHistory,
+    primary,
+    toggleTargets,
+    showDetails,
+    scrollToGid: (_gid: string) => {},
+  });
+  kb.current = {
+    taskRows,
+    selectedCount: selected.size,
+    isHistory,
+    primary,
+    toggleTargets,
+    showDetails,
+    scrollToGid: (gid: string) => {
+      const index = rows.findIndex(
+        (row) => row.kind === "task" && row.task.gid === gid
+      );
+      if (index >= 0) virtualizer.scrollToIndex(index);
+    },
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (document.querySelector(".modal-backdrop, .pref-confirm")) return;
+      const k = kb.current;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const typing =
+        !!target &&
+        (target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(target.tagName));
+      const bindings = useStore.getState().settings.keyBindings;
+      if (
+        shortcutMatches(event, "focusSearch", bindings) ||
+        (!typing && shortcutMatches(event, "quickSearch", bindings))
+      ) {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+      if (shortcutMatches(event, "clearSearch", bindings)) {
+        if (target && target === searchRef.current) {
+          event.preventDefault();
+          if (useView.getState().query) useView.getState().setQuery("");
+          else searchRef.current?.blur();
+        } else if (!typing && !useView.getState().detailsOpen && k.selectedCount) {
+          setSelected(new Set());
+        }
+        return;
+      }
+      if (typing) return;
+      if (shortcutMatches(event, "undoRemove", bindings)) {
+        if (useToast.getState().toast?.onAction) {
+          event.preventDefault();
+          void useToast.getState().runAction();
+        }
+        return;
+      }
+      if (k.isHistory) return;
+      const onControl = !!target?.closest("button,a,summary,[role=menuitem]");
+      const onResizer = !!target?.closest("[role=separator]");
+      if (shortcutMatches(event, "togglePause", bindings)) {
+        if (onControl) return;
+        event.preventDefault();
+        k.toggleTargets();
+      } else if (shortcutMatches(event, "showDetails", bindings)) {
+        if (onControl || !k.primary) return;
+        event.preventDefault();
+        k.showDetails(k.primary);
+      } else if (
+        shortcutMatches(event, "nextDownload", bindings) ||
+        shortcutMatches(event, "previousDownload", bindings)
+      ) {
+        if (onResizer || !k.taskRows.length) return;
+        event.preventDefault();
+        const list = k.taskRows;
+        const delta = shortcutMatches(event, "nextDownload", bindings) ? 1 : -1;
+        const from = list.findIndex(
+          (task) => task.gid === (cursor.current ?? k.primary?.gid)
+        );
+        const next =
+          from < 0
+            ? delta > 0
+              ? 0
+              : list.length - 1
+            : Math.max(0, Math.min(list.length - 1, from + delta));
+        const gid = list[next].gid;
+        cursor.current = gid;
+        if (event.shiftKey) {
+          const base = list.findIndex(
+            (task) => task.gid === (anchor.current ?? k.primary?.gid)
+          );
+          const start = base < 0 ? next : base;
+          anchor.current = list[start].gid;
+          setSelected(
+            new Set(
+              list
+                .slice(Math.min(start, next), Math.max(start, next) + 1)
+                .map((task) => task.gid)
+            )
+          );
+        } else {
+          setSelected(new Set([gid]));
+          anchor.current = gid;
+        }
+        useStore.getState().select(gid);
+        k.scrollToGid(gid);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const context = (event: React.MouseEvent, task: Task) => {
     event.preventDefault();
     if (!online) return;
@@ -664,7 +859,21 @@ export default function TaskTable() {
       <div className="task-table-toolbar">
         <span className="lbl">
           Downloads
+          {query.trim() && (
+            <>
+              {" "}
+              <span className="download-count">
+                {rows.length} of {baseRows.length}
+              </span>
+            </>
+          )}
         </span>
+        <SearchBox
+          ref={searchRef}
+          value={query}
+          onChange={(value) => useView.getState().setQuery(value)}
+          onCommit={commitSearch}
+        />
       </div>
       {selectedTasks.length > 0 && !isHistory && (
         <div
@@ -735,9 +944,26 @@ export default function TaskTable() {
       )}
       <div className="grid" ref={gridRef} style={columnStyle}>
         <div className="row head">
-          {COLUMN_LABELS.map((label, index) => (
-            <span key={label}>
-              {label}
+          {COLUMN_LABELS.map((label, index) => {
+            const sortKey = SORT_KEYS[index];
+            const sorted = sort?.key === sortKey ? sort.dir : undefined;
+            return (
+            <span
+              key={label}
+              aria-sort={
+                sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"
+              }
+            >
+              <button
+                type="button"
+                className={`col-sort${sorted ? ` on ${sorted}` : ""}`}
+                aria-label={`Sort by ${label.toLowerCase()}`}
+                title={`Sort by ${label.toLowerCase()}`}
+                onClick={() => useView.getState().cycleSort(sortKey)}
+              >
+                {label}
+                <i className="sort-caret" aria-hidden="true" />
+              </button>
               {index < COLUMN_LABELS.length - 1 && (
                 <button
                   type="button"
@@ -759,7 +985,8 @@ export default function TaskTable() {
                 />
               )}
             </span>
-          ))}
+            );
+          })}
         </div>
         {hasOfflineTasks && (
           <div className="connection-banner" role="status">
@@ -817,6 +1044,7 @@ export default function TaskTable() {
                         onReveal={reveal}
                         onOpen={open}
                         onSelectFiles={setFileSelection}
+                        onDetails={showDetails}
                         onSelect={selectRow}
                         onContext={context}
                       />
@@ -861,13 +1089,6 @@ export default function TaskTable() {
             <div className="empty">{emptyText}</div>
           )}
         </div>
-        {isHistory && history.length > 0 && (
-          <div className="history-actions">
-            <button onClick={() => void useStore.getState().clearHistory()}>
-              Clear history
-            </button>
-          </div>
-        )}
       </div>
       {actionError && (
         <div className="table-error" role="alert">
@@ -912,6 +1133,15 @@ export default function TaskTable() {
                 Select files
               </button>
             )}
+          <button
+            role="menuitem"
+            onClick={() => {
+              showDetails(menu.task);
+              setMenu(undefined);
+            }}
+          >
+            Details
+          </button>
           <button role="menuitem" onClick={() => remove(menu.task)}>
             Remove
           </button>

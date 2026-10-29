@@ -15,6 +15,7 @@ import { selectionTotals, type TorrentFile } from "./torrent-files";
 import { redactDiagnostics } from "./diagnostics";
 import { reconcileTaskSnapshot } from "./task-snapshot";
 import { taskActionForAria2Status } from "./task-actions";
+import { clampShortcutBindings, type ShortcutBindings } from "./shortcuts";
 
 export type UiState = "dl" | "seed" | "pa" | "done" | "err";
 export type Filter = "all" | "dl" | "seed" | "done";
@@ -41,6 +42,15 @@ export type Task = {
 export type AddOptions = Record<string, string | string[]>;
 type RetrySource = { kind: "uris"; uris: string[] };
 type RetrySourceMap = Record<string, RetrySource>;
+export type TaskDetails = {
+  uris: string[];
+  infoHash?: string;
+  pieceLength?: number;
+  numPieces?: number;
+  connections: number;
+  trackers: string[];
+  comment?: string;
+};
 export type Settings = {
   maxDownloadMB: number;
   maxUploadMB: number;
@@ -69,6 +79,7 @@ export type Settings = {
   theme: "system" | "dark" | "light";
   compactList: boolean;
   reduceMotion: boolean;
+  keyBindings: ShortcutBindings;
   startMinimized: boolean;
   connectTimeoutSeconds: number;
   customUserAgent: string;
@@ -102,6 +113,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   compactList: false,
   reduceMotion: false,
+  keyBindings: {},
   startMinimized: true,
   connectTimeoutSeconds: 10,
   customUserAgent: "",
@@ -114,6 +126,7 @@ export function clampSettings(settings: Settings): Settings {
     fileConflict: ["rename", "overwrite", "error"].includes(settings.fileConflict) ? settings.fileConflict : DEFAULT_SETTINGS.fileConflict,
     diskAllocation: ["none", "prealloc", "falloc"].includes(settings.diskAllocation) ? settings.diskAllocation : DEFAULT_SETTINGS.diskAllocation,
     theme: ["system", "dark", "light"].includes(settings.theme) ? settings.theme : DEFAULT_SETTINGS.theme,
+    keyBindings: clampShortcutBindings(settings.keyBindings),
     maxDownloadMB: clamp(settings.maxDownloadMB, 0, 100000),
     maxUploadMB: clamp(settings.maxUploadMB, 0, 100000),
     maxConcurrent: Math.round(clamp(settings.maxConcurrent, 1, 20)),
@@ -217,6 +230,8 @@ interface S {
   ): Promise<void>;
   cancelTorrentSelection(gids: string[]): Promise<void>;
   taskUris(gid: string): Promise<string[]>;
+  taskDetails(gid: string): Promise<TaskDetails>;
+  restoreTask(task: Task, uris: string[]): Promise<void>;
   removeTask(task: Task, alsoDeleteFiles?: boolean): Promise<void>;
   retryTask(task: Task): Promise<void>;
   pauseAll(): Promise<void>;
@@ -1026,9 +1041,62 @@ export const useStore = create<S>((set, get) => {
     },
     async taskUris(gid) {
       if (!api) throw new Error("aria2 is not connected");
-      return api
-        .call<any[]>("getUris", gid)
-        .then((uris) => uris.map((entry) => entry.uri));
+      const unique = (entries: any[]) => [
+        ...new Set(entries.map((entry) => String(entry.uri))),
+      ];
+      try {
+        return unique(await api.call<any[]>("getUris", gid));
+      } catch {
+        // aria2 only answers getUris for live downloads. Fall back to the
+        // source we saved when the download was added, then to the URIs aria2
+        // keeps on the file list of failed and finished results.
+        const saved = retrySources[gid]?.uris;
+        if (saved?.length) return saved;
+        const status = await api.call<{ files?: { uris?: any[] }[] }>(
+          "tellStatus",
+          gid,
+          ["files"]
+        );
+        return unique((status.files ?? []).flatMap((file) => file.uris ?? []));
+      }
+    },
+    async taskDetails(gid) {
+      if (!api) throw new Error("aria2 is not connected");
+      const [status, uris] = await Promise.all([
+        api.call<Record<string, any>>("tellStatus", gid, [
+          "infoHash",
+          "pieceLength",
+          "numPieces",
+          "connections",
+          "bittorrent",
+        ]),
+        api
+          .call<any[]>("getUris", gid)
+          .then((entries) => [...new Set(entries.map((entry) => String(entry.uri)))])
+          .catch(() => [] as string[]),
+      ]);
+      const trackers = (status.bittorrent?.announceList ?? [])
+        .flat()
+        .map(String)
+        .filter((tracker: string, index: number, all: string[]) => all.indexOf(tracker) === index);
+      return {
+        uris,
+        infoHash: status.infoHash || undefined,
+        pieceLength: status.pieceLength ? +status.pieceLength : undefined,
+        numPieces: status.numPieces ? +status.numPieces : undefined,
+        connections: +status.connections || 0,
+        trackers,
+        comment: status.bittorrent?.comment || undefined,
+      };
+    },
+    async restoreTask(task, uris) {
+      if (!api) throw new Error("aria2 is not connected");
+      const options: Record<string, string> = { continue: "true" };
+      if (task.dir) options.dir = task.dir;
+      if (task.state === "pa" && !task.queued) options.pause = "true";
+      const gid = await api.call<string>("addUri", uris, options);
+      await rememberRetrySource(gid, { kind: "uris", uris });
+      void refresh(true);
     },
     async removeTask(task, alsoDeleteFiles = false) {
       await get().removeHistory(task.gid);

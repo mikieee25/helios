@@ -1,4 +1,5 @@
 import "./globals.css";
+import "./features.css";
 import type { ReactNode } from "react";
 
 export const metadata = { title: "Helios" };

@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { animateDialogEntrance, animateDialogExit } from "@/lib/motion";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "@/lib/store";
 import { bridgeItemOptions, type BridgeAddItem } from "@/lib/bridge";
 import { isSupportedDownloadSource } from "@/lib/download-source";
+import ModalBackdrop from "./Modal";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const isTorrent = (path: string) => /\.torrent$/i.test(path);
+
 function toBase64(bytes: Uint8Array) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000)
@@ -37,10 +38,6 @@ export default function AddDialog({
 }) {
   const settings = useStore((s) => s.settings);
   const dialogRef = useRef<HTMLFormElement>(null);
-  const backdropRef = useRef<HTMLDivElement>(null);
-  const presentRef = useRef(isOpen);
-  const [present, setPresent] = useState(isOpen);
-  const [closing, setClosing] = useState(false);
   const [links, setLinks] = useState("");
   const [bridgeItems, setBridgeItems] = useState<BridgeAddItem[]>([]);
   const [directory, setDirectory] = useState("");
@@ -50,31 +47,6 @@ export default function AddDialog({
   const [torrentName, setTorrentName] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-
-  useLayoutEffect(() => {
-    if (isOpen) {
-      presentRef.current = true;
-      setPresent(true);
-      setClosing(false);
-      return animateDialogEntrance(
-        backdropRef.current,
-        dialogRef.current,
-        settings.reduceMotion
-      );
-    }
-    if (!presentRef.current) return;
-    setClosing(true);
-    return animateDialogExit(
-      backdropRef.current,
-      dialogRef.current,
-      settings.reduceMotion,
-      () => {
-        presentRef.current = false;
-        setPresent(false);
-        setClosing(false);
-      }
-    );
-  }, [isOpen, settings.reduceMotion]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -210,7 +182,7 @@ export default function AddDialog({
     };
   }, [onDropOpen]);
 
-  if (!isOpen && !present) return null;
+  if (!isOpen) return null;
 
   async function chooseTorrent() {
     if (!isTauri()) return;
@@ -262,9 +234,7 @@ export default function AddDialog({
         ]);
         return;
       }
-      const valid = allLines.filter(({ uri }) =>
-        isSupportedDownloadSource(uri)
-      );
+      const valid = allLines.filter(({ uri }) => isSupportedDownloadSource(uri));
       const errorsByLine = allLines
         .filter(({ uri }) => !isSupportedDownloadSource(uri))
         .map(({ line, uri }) => `Line ${line}: unsupported link: ${uri}`);
@@ -351,9 +321,7 @@ export default function AddDialog({
   }
 
   return (
-    <div
-      ref={backdropRef}
-      className={`modal-backdrop${closing ? " is-closing" : ""}`}
+    <ModalBackdrop
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <form
@@ -460,6 +428,6 @@ export default function AddDialog({
           </button>
         </div>
       </form>
-    </div>
+    </ModalBackdrop>
   );
 }
