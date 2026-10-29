@@ -572,6 +572,8 @@ svg.i {
 }
 /* app adaptations */
 .win {
+  width: 100%;
+  min-width: 0;
   max-width: none;
   margin: 0;
   border: 0;
