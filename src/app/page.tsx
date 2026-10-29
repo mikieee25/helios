@@ -23,6 +23,7 @@ import { isSupportedDownloadSource } from "@/lib/download-source";
 import { prefersReducedMotion } from "@/lib/motion";
 import { shortcutMatches } from "@/lib/shortcuts";
 import { logDiagnostic } from "@/lib/developer-log";
+import { applyThemeColors, type ThemeMode } from "@/lib/theme";
 
 type SelectionRequest = {
   gid: string;
@@ -34,10 +35,22 @@ type SelectionRequest = {
 export default function Page() {
   const view = useStore((s) => s.view);
   const reduceMotion = useStore((s) => s.settings.reduceMotion);
+  const theme = useStore((s) => s.settings.theme);
+  const themeColors = useStore((s) => s.settings.themeColors);
   const rootRef = useRef<HTMLDivElement>(null);
   const mainContentRef = useRef<HTMLDivElement>(null);
   const previousView = useRef(view);
   const introPlayed = useRef(false);
+  useEffect(() => {
+    const query = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const mode: ThemeMode = theme === "system" ? (query.matches ? "dark" : "light") : theme;
+      applyThemeColors(mode, themeColors[mode]);
+    };
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, [theme, themeColors]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const originalError = console.error;

@@ -6,7 +6,6 @@ import { prefersReducedMotion } from "@/lib/motion";
 
 const W = 560,
   H = 286,
-  HEAD = W - 6.25,
   step = W / (N - 1);
 
 // Catmull-Rom to cubic Bezier; control x is clamped so a short head segment cannot kink.
@@ -106,7 +105,7 @@ export function SeriesToggle() {
         className={series === "dl" ? "on" : ""}
         onClick={() => useStore.getState().setSeries("dl")}
       >
-        <i style={{ background: "var(--cy)" }} />
+        <i style={{ background: "var(--download)" }} />
         Download
       </button>
       <button
@@ -126,13 +125,14 @@ export default function Chart() {
   useEffect(() => {
     const svg = ref.current!;
     const c =
-      "stop-color:color-mix(in srgb,var(--upload) var(--mix),var(--cy))";
+      "stop-color:color-mix(in srgb,var(--upload) var(--mix),var(--download))";
     svg.style.setProperty("--mix", "0%");
     svg.innerHTML = `<defs><linearGradient id="gf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="${c};stop-opacity:.38"/><stop offset="1" style="${c};stop-opacity:0"/></linearGradient><linearGradient id="gs" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${W}" y2="0"><stop offset="0" style="${c}"/><stop offset=".7" style="${c}"/><stop offset="1" stop-color="var(--chart-line)"/></linearGradient><radialGradient id="gg"><stop offset="0" style="${c};stop-opacity:.45"/><stop offset="1" style="${c};stop-opacity:0"/></radialGradient></defs><circle id="c-g" r="70" fill="url(#gg)"/><path id="p-f" fill="url(#gf)"/><path id="p-s" fill="none" stroke="url(#gs)" stroke-width="2"/><circle id="c-d" r="5.5" fill="var(--chart-line)" stroke="var(--chart-marker-stroke)" stroke-opacity=".6" stroke-width="1.5"/>`;
     const q = (id: string) => svg.querySelector(`#${id}`)!;
     const [glow, fill, line, dot] = [q("c-g"), q("p-f"), q("p-s"), q("c-d")];
     let mix = 0,
       ymax = 14,
+      headX = W - 6.25,
       raf = 0;
     const motionPreference =
       typeof window.matchMedia === "function"
@@ -142,6 +142,7 @@ export default function Chart() {
     // The line scrolls left continuously; its head eases toward each new sample.
     const frame = (now: number) => {
       const { dlHist, upHist, series, settings } = useStore.getState();
+      const head = headX;
       const reduced = settings.reduceMotion || !!motionPreference?.matches;
       const tgt = series === "ul" ? 1 : 0;
       const f = reduced ? 1 : Math.min(1, (now - clock.t) / 1000);
@@ -153,8 +154,8 @@ export default function Chart() {
       const y = (n: number) => H * 0.88 - (n / ymax) * H * 0.66;
       const p: number[][] = [];
       for (let i = 0; i < M - 1; i++)
-        p.push([HEAD + (i - N + 1 - f) * step, y(v[i])]);
-      if (f > 0.001) p.push([HEAD, y(v[M - 2] + (v[M - 1] - v[M - 2]) * f)]);
+        p.push([head + (i - N + 1 - f) * step, y(v[i])]);
+      if (f > 0.001) p.push([head, y(v[M - 2] + (v[M - 1] - v[M - 2]) * f)]);
       const d = curve(p),
         e = p[p.length - 1];
       line.setAttribute("d", d);
@@ -178,6 +179,8 @@ export default function Chart() {
     const fit = () => {
       const r = svg.getBoundingClientRect();
       if (!r.width || !r.height) return;
+      // Keep the head's right inset fixed in CSS pixels as the SVG stretches.
+      headX = W - (6.25 * W) / r.width;
       const t = `scale(${(W / r.width).toFixed(4)}, ${(H / r.height).toFixed(4)})`;
       for (const el of [dot, glow] as SVGElement[]) {
         el.style.transformBox = "fill-box";

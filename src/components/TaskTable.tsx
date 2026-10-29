@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { gsap } from "gsap";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useStore, Task } from "@/lib/store";
+import { useStore, Task, type QueuePriority } from "@/lib/store";
 import type { HistoryEntry } from "@/lib/history";
 import { buildOverview, type OverviewRow } from "@/lib/overview";
 import { sz, eta } from "@/lib/format";
@@ -48,6 +48,7 @@ type RowProps = {
   onRemove(task: Task): void;
   onToggle(task: Task): void;
   onRetry(task: Task): void;
+  onReconnect(task: Task): void;
   onReveal(task: Task): void;
   onOpen(task: Task): void;
   onSelectFiles(task: Task): void;
@@ -63,6 +64,7 @@ const Row = memo(function Row({
   onRemove,
   onToggle,
   onRetry,
+  onReconnect,
   onReveal,
   onOpen,
   onSelectFiles,
@@ -72,9 +74,11 @@ const Row = memo(function Row({
   disabled = false,
 }: RowProps) {
   const time =
-    t.state === "dl"
+    t.state === "dl" && !t.stalled
       ? eta((t.size * (1 - t.done)) / t.speed)
-      : t.state === "seed"
+      : t.stalled
+        ? "Stalled"
+        : t.state === "seed"
         ? "Seeding"
         : t.state === "done"
           ? "Completed"
@@ -91,6 +95,8 @@ const Row = memo(function Row({
           ? [t.errorMessage, t.errorCode && `Error ${t.errorCode}`]
               .filter(Boolean)
               .join("\n") || "Download failed"
+          : t.stalled
+            ? "No download progress for 5 minutes. Use Reconnect to retry the connection."
           : undefined
       }
       onClick={(event) => onSelect(t.gid, event)}
@@ -111,6 +117,11 @@ const Row = memo(function Row({
         >
           {t.name}
         </span>
+        {t.queued && t.queuePriority !== "normal" && (
+          <small className={`queue-priority ${t.queuePriority}`}>
+            {t.queuePriority}
+          </small>
+        )}
         <span className="row-actions">
           {(t.state === "dl" || t.state === "seed" || t.state === "pa") && (
             <button
@@ -140,6 +151,20 @@ const Row = memo(function Row({
               onClick={(event) => {
                 event.stopPropagation();
                 onRetry(t);
+              }}
+            >
+              <Ic n="retry" />
+            </button>
+          )}
+          {t.stalled && (
+            <button
+              className="st"
+              disabled={disabled}
+              aria-label="Reconnect stalled download"
+              title="Reconnect stalled download"
+              onClick={(event) => {
+                event.stopPropagation();
+                onReconnect(t);
               }}
             >
               <Ic n="retry" />
@@ -613,6 +638,8 @@ export default function TaskTable() {
   };
   const retry = (task: Task) =>
     void run(() => useStore.getState().retryTask(task));
+  const reconnect = (task: Task) =>
+    void run(() => useStore.getState().reconnectTask(task));
   const toggle = (task: Task) =>
     void run(() => useStore.getState().toggle(task));
   const reveal = (task: Task) =>
@@ -1054,6 +1081,7 @@ export default function TaskTable() {
                         onRemove={remove}
                         onToggle={toggle}
                         onRetry={retry}
+                        onReconnect={reconnect}
                         onReveal={reveal}
                         onOpen={open}
                         onSelectFiles={setFileSelection}
@@ -1135,6 +1163,45 @@ export default function TaskTable() {
             <button role="menuitem" onClick={() => retry(menu.task)}>
               Retry
             </button>
+          )}
+          {menu.task.stalled && (
+            <button role="menuitem" onClick={() => reconnect(menu.task)}>
+              Reconnect stalled download
+            </button>
+          )}
+          {menu.task.queued && (
+            <>
+              <div className="task-menu-label">Queue position</div>
+              {(["top", "up", "down", "bottom"] as const).map((position) => (
+                <button
+                  key={position}
+                  role="menuitem"
+                  onClick={() =>
+                    void run(() =>
+                      useStore.getState().moveQueuedTask(menu.task.gid, position)
+                    )
+                  }
+                >
+                  {({ top: "Move to top", up: "Move up", down: "Move down", bottom: "Move to bottom" })[position]}
+                </button>
+              ))}
+              <div className="task-menu-label">Priority</div>
+              {(["high", "normal", "low"] as const).map((priority: QueuePriority) => (
+                <button
+                  key={priority}
+                  role="menuitemradio"
+                  aria-checked={menu.task.queuePriority === priority}
+                  onClick={() =>
+                    void run(() =>
+                      useStore.getState().setQueuePriority(menu.task.gid, priority)
+                    )
+                  }
+                >
+                  {priority[0].toUpperCase() + priority.slice(1)} priority
+                  {menu.task.queuePriority === priority ? " ✓" : ""}
+                </button>
+              ))}
+            </>
           )}
           {menu.task.torrent &&
             (menu.task.state === "pa" || menu.task.state === "dl") && (

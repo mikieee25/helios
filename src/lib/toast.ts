@@ -5,6 +5,7 @@ export type Toast = {
   message: string;
   actionLabel?: string;
   onAction?: () => void | Promise<void>;
+  onExpire?: () => void | Promise<void>;
 };
 
 const DURATION_MS = 7000;
@@ -25,12 +26,15 @@ export const useToast = create<ToastState>((set, get) => ({
   toast: undefined,
   show: (toast, durationMs = DURATION_MS) => {
     clearTimeout(timer);
+    void get().toast?.onExpire?.();
     set({ toast: { ...toast, id: nextId++ } });
     timer = setTimeout(() => get().dismiss(), durationMs);
   },
   dismiss: () => {
+    const current = get().toast;
     clearTimeout(timer);
     set({ toast: undefined });
+    void current?.onExpire?.();
   },
   pause: () => clearTimeout(timer),
   resume: () => {
@@ -40,7 +44,8 @@ export const useToast = create<ToastState>((set, get) => ({
   runAction: async () => {
     const current = get().toast;
     if (!current?.onAction) return;
-    get().dismiss();
+    clearTimeout(timer);
+    set({ toast: undefined });
     try {
       await current.onAction();
     } catch (error) {

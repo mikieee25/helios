@@ -20,9 +20,11 @@ import { redactDiagnostics } from "./diagnostics";
 import { reconcileTaskSnapshot } from "./task-snapshot";
 import { taskActionForAria2Status } from "./task-actions";
 import { clampShortcutBindings, type ShortcutBindings } from "./shortcuts";
+import { DEFAULT_THEME_COLORS, normalizeThemeColors, type ThemeColors, type ThemeMode } from "./theme";
 
 export type UiState = "dl" | "seed" | "pa" | "done" | "err";
 export type Filter = "all" | "dl" | "seed" | "done";
+export type QueuePriority = "high" | "normal" | "low";
 export type Task = {
   gid: string;
   name: string;
@@ -35,6 +37,8 @@ export type Task = {
   peers: number;
   state: UiState;
   queued: boolean;
+  stalled?: boolean;
+  queuePriority?: QueuePriority;
   since: number;
   category: FileCategory;
   dir: string;
@@ -81,6 +85,7 @@ export type Settings = {
   deleteFilesWhenRemoving: boolean;
   chooseFilesBeforeStarting: boolean;
   theme: "system" | "dark" | "light";
+  themeColors: Record<ThemeMode, ThemeColors>;
   compactList: boolean;
   reduceMotion: boolean;
   keyBindings: ShortcutBindings;
@@ -115,6 +120,7 @@ export const DEFAULT_SETTINGS: Settings = {
   deleteFilesWhenRemoving: false,
   chooseFilesBeforeStarting: false,
   theme: "system",
+  themeColors: DEFAULT_THEME_COLORS,
   compactList: false,
   reduceMotion: false,
   keyBindings: {},
@@ -130,6 +136,7 @@ export function clampSettings(settings: Settings): Settings {
     fileConflict: ["rename", "overwrite", "error"].includes(settings.fileConflict) ? settings.fileConflict : DEFAULT_SETTINGS.fileConflict,
     diskAllocation: ["none", "prealloc", "falloc"].includes(settings.diskAllocation) ? settings.diskAllocation : DEFAULT_SETTINGS.diskAllocation,
     theme: ["system", "dark", "light"].includes(settings.theme) ? settings.theme : DEFAULT_SETTINGS.theme,
+    themeColors: normalizeThemeColors(settings.themeColors),
     keyBindings: clampShortcutBindings(settings.keyBindings),
     maxDownloadMB: clamp(settings.maxDownloadMB, 0, 100000),
     maxUploadMB: clamp(settings.maxUploadMB, 0, 100000),
@@ -218,6 +225,8 @@ interface S {
   updateAutostart(enabled: boolean): Promise<void>;
   clearHistory(): Promise<void>;
   removeHistory(id: string): Promise<void>;
+  hidePendingRemoval(gids: string[]): void;
+  restorePendingRemoval(tasks: Task[]): void;
   shutdown(): Promise<void>;
   saveSession(): Promise<void>;
   toggle(t: Task): Promise<void>;
@@ -238,6 +247,9 @@ interface S {
   restoreTask(task: Task, uris: string[]): Promise<void>;
   removeTask(task: Task, alsoDeleteFiles?: boolean): Promise<void>;
   retryTask(task: Task): Promise<void>;
+  reconnectTask(task: Task): Promise<void>;
+  moveQueuedTask(gid: string, position: "top" | "up" | "down" | "bottom"): Promise<void>;
+  setQueuePriority(gid: string, priority: QueuePriority): Promise<void>;
   pauseAll(): Promise<void>;
   resumeAll(): Promise<void>;
 }
@@ -258,15 +270,19 @@ let stoppedRevision = 1;
 let loadedStoppedRevision = 0;
 let stoppedCache: Record<string, any>[] = [];
 let retrySources: RetrySourceMap = {};
+let queuePriorities: Record<string, QueuePriority> = {};
 let retrySourcesWrite = Promise.resolve();
 let refreshTicks = 0;
 let unlistenBridgeAdded: UnlistenFn | undefined;
 let aria2DefaultDir: string | undefined;
 const seen = new Map<string, number>();
+const progressSeen = new Map<string, { completed: number; at: number }>();
+const STALLED_AFTER_MS = 5 * 60 * 1000;
 const pendingCompletions = new Set<string>();
 const completing = new Set<string>();
 const persistedSeedGids = new Set<string>();
 const savedTorrentCompletionGids = new Set<string>();
+const pendingRemovalGids = new Set<string>();
 const same = (a: Task, b: Task) =>
   (Object.keys(a) as (keyof Task)[]).every((k) =>
     k === "files"
@@ -300,6 +316,20 @@ function toTask(r: any): Task | undefined {
   const selectedTotals = selectionTotals(files);
   const st: string = r.status;
   const seeder = isTorrentFileSelected(r.seeder);
+  const completedLength = Number(r.completedLength) || 0;
+  const now = Date.now();
+  const previousProgress = progressSeen.get(r.gid);
+  let stalled = false;
+  if (st === "active" && !seeder) {
+    const progress =
+      !previousProgress || previousProgress.completed !== completedLength
+        ? { completed: completedLength, at: now }
+        : previousProgress;
+    progressSeen.set(r.gid, progress);
+    stalled = now - progress.at >= STALLED_AFTER_MS;
+  } else {
+    progressSeen.delete(r.gid);
+  }
   const allFileTotals = files.reduce(
     (totals, file) => ({
       size: totals.size + file.length,
@@ -356,6 +386,8 @@ function toTask(r: any): Task | undefined {
     peers: +r.connections || 0,
     state,
     queued: st === "waiting",
+    stalled,
+    queuePriority: queuePriorities[r.gid] ?? "normal",
     since: seen.get(r.gid) ?? Date.now(),
     category:
       fileCategory(name) === "other"
@@ -539,11 +571,18 @@ export const useStore = create<S>((set, get) => {
           previous && same(previous, task) ? previous : task
         );
       }
+      for (const gid of progressSeen.keys()) {
+        if (!activeGids.has(gid)) progressSeen.delete(gid);
+      }
       const tasks = reconcileTaskSnapshot(
         [...old.values()],
         [...taskByGid.values()],
         shouldFetchStopped
       );
+      const visibleGids = new Set(tasks.map((task) => task.gid));
+      for (const gid of pendingRemovalGids) {
+        if (!visibleGids.has(gid)) pendingRemovalGids.delete(gid);
+      }
       const newSeeds = tasks.filter(
         (task) => task.state === "seed" && !persistedSeedGids.has(task.gid)
       );
@@ -595,7 +634,7 @@ export const useStore = create<S>((set, get) => {
       const { dlHist, upHist } = get();
       clock.t = performance.now();
       set({
-        tasks,
+        tasks: tasks.filter((task) => !pendingRemovalGids.has(task.gid)),
         dl: +g.downloadSpeed,
         up: +g.uploadSpeed,
         dlHist: [...dlHist.slice(1), +g.downloadSpeed / 1048576],
@@ -699,17 +738,27 @@ export const useStore = create<S>((set, get) => {
   }
 
   async function initialize() {
-    const [history, settings, legacyChooseFiles, storedRetrySources] =
+    const [history, settings, legacyChooseFiles, storedRetrySources, storedQueuePriorities] =
       await Promise.all([
         historyStore.load(),
         readValue<Partial<Settings>>("settings", {}),
         readValue<boolean>("chooseFilesBeforeStarting", false),
         readValue<RetrySourceMap>("retrySources", {}),
+        readValue<Record<string, QueuePriority>>("queuePriorities", {}),
       ]);
     retrySources =
       storedRetrySources && typeof storedRetrySources === "object"
         ? storedRetrySources
         : {};
+    queuePriorities = Object.fromEntries(
+      Object.entries(
+        storedQueuePriorities && typeof storedQueuePriorities === "object"
+          ? storedQueuePriorities
+          : {}
+      ).filter(([, priority]) =>
+        ["high", "normal", "low"].includes(priority)
+      )
+    );
     const loadedSettings = clampSettings({
       ...DEFAULT_SETTINGS,
       ...settings,
@@ -915,6 +964,22 @@ export const useStore = create<S>((set, get) => {
     },
     async removeHistory(id) {
       set({ history: await historyStore.remove(id) });
+    },
+    hidePendingRemoval(gids) {
+      gids.forEach((gid) => pendingRemovalGids.add(gid));
+      set((state) => ({
+        tasks: state.tasks.filter((task) => !pendingRemovalGids.has(task.gid)),
+      }));
+    },
+    restorePendingRemoval(tasks) {
+      tasks.forEach((task) => pendingRemovalGids.delete(task.gid));
+      set((state) => ({
+        tasks: [
+          ...state.tasks,
+          ...tasks.filter((task) => !state.tasks.some((item) => item.gid === task.gid)),
+        ],
+      }));
+      void refresh(true);
     },
     shutdown() {
       if (shutdownPromise) return shutdownPromise;
@@ -1253,6 +1318,68 @@ export const useStore = create<S>((set, get) => {
       if (failed) throw new Error(failed);
       await api.call("removeDownloadResult", task.gid);
       await forgetRetrySources([task.gid]);
+      void refresh(true);
+    },
+    async reconnectTask(task) {
+      if (!api) throw new Error("aria2 is not connected");
+      const { status } = await api.call<{ status: string }>("tellStatus", task.gid, ["status"]);
+      if (status !== "active") throw new Error("This download is no longer active.");
+      await api.call("forcePause", task.gid);
+      await api.call("unpause", task.gid);
+      progressSeen.delete(task.gid);
+      void refresh(true);
+    },
+    async moveQueuedTask(gid, position) {
+      if (!api) throw new Error("aria2 is not connected");
+      const waiting = await api.call<{ gid: string }[]>("tellWaiting", 0, 5000, ["gid"]);
+      const index = waiting.findIndex((task) => task.gid === gid);
+      if (index < 0) throw new Error("Only queued downloads can be reordered.");
+      const target =
+        position === "top" ? 0
+          : position === "bottom" ? waiting.length - 1
+            : position === "up" ? Math.max(0, index - 1)
+              : Math.min(waiting.length - 1, index + 1);
+      if (target !== index) await api.call("changePosition", gid, target, "POS_SET");
+      await api.call("saveSession");
+      void refresh(true);
+    },
+    async setQueuePriority(gid, priority) {
+      if (!api) throw new Error("aria2 is not connected");
+      const waiting = await api.call<{ gid: string }[]>("tellWaiting", 0, 5000, ["gid"]);
+      if (!waiting.some((task) => task.gid === gid))
+        throw new Error("Priority can only be set for queued downloads.");
+      const nextPriorities = { ...queuePriorities, [gid]: priority };
+      const rank: Record<QueuePriority, number> = { high: 0, normal: 1, low: 2 };
+      const ordered = [...waiting].sort(
+        (a, b) => rank[nextPriorities[a.gid] ?? "normal"] - rank[nextPriorities[b.gid] ?? "normal"]
+      );
+      try {
+        for (const [index, task] of ordered.entries())
+          await api.call("changePosition", task.gid, index, "POS_SET");
+      } catch (error) {
+        void refresh(true);
+        throw new Error(`Could not reorder the queue: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        await writeValue("queuePriorities", nextPriorities);
+      } catch (error) {
+        for (const [index, task] of waiting.entries())
+          await api.call("changePosition", task.gid, index, "POS_SET").catch(() => {});
+        throw new Error(`Queue order changed, but priority could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      queuePriorities = nextPriorities;
+      try {
+        await api.call("saveSession");
+      } catch (error) {
+        recordDiagnosticError("Could not save the reordered download queue");
+        throw new Error(`Priority applied, but Helios could not save the queue order: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      set((state) => ({
+        tasks: state.tasks.map((task) => ({
+          ...task,
+          queuePriority: queuePriorities[task.gid] ?? "normal",
+        })),
+      }));
       void refresh(true);
     },
   };

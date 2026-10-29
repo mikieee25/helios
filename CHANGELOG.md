@@ -2,6 +2,22 @@
 
 Notable Helios changes, newest first.
 
+## [0.1.7] - 2026-10-29
+
+### Added
+
+- Added customizable light and dark color palettes with a reset to defaults.
+- Moved keyboard shortcut configuration into a separate dialog.
+- Added queue reordering, priorities, and a reconnect action for stalled downloads.
+
+### Fixed
+
+- Kept removed completed downloads available for Undo until its notification expires.
+- Kept the chart marker inset consistent in wide windows.
+- Started minimized-to-tray launches without restoring the previous visible window state.
+- Stopped only Helios' installed aria2 process before the NSIS installer replaces it.
+- Excluded shortcut dialog rows from the Settings alignment diagnostic.
+
 ## [0.1.6] - 2026-10-29
 
 ### Added

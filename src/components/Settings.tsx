@@ -13,6 +13,7 @@ import { installUpdate } from "@/lib/updater";
 import { animateDialogEntrance } from "@/lib/motion";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import DeveloperConsole from "@/components/DeveloperConsole";
+import { DEFAULT_THEME_COLORS, type ThemeMode } from "@/lib/theme";
 
 type BridgeState = { enabled: boolean; port: number; paired: boolean; pairingCode: string | null; pairingExpiresAt: number | null };
 type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: number | null };
@@ -78,11 +79,16 @@ export default function Settings() {
   const [proxy, setProxy] = useState({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy });
   const [proxyError, setProxyError] = useState("");
   const [resetAll, setResetAll] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [developerConsole, setDeveloperConsole] = useState(false);
   const closeDeveloperConsole = useCallback(() => setDeveloperConsole(false), []);
   const aboutClicks = useRef({ count: 0, last: 0 });
   const resetBackdropRef = useRef<HTMLDivElement>(null);
   const resetDialogRef = useRef<HTMLElement>(null);
+  const shortcutsDialogRef = useRef<HTMLDialogElement>(null);
+  const [activeThemeMode, setActiveThemeMode] = useState<ThemeMode>(() =>
+    typeof window !== "undefined" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  );
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [appVersion, setAppVersion] = useState(appPackage.version);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
@@ -117,19 +123,28 @@ export default function Settings() {
   useEffect(() => setProxy({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy }), [settings.proxyMode, settings.proxyUrl, settings.proxyUser, settings.proxyPassword, settings.noProxy]);
   useEffect(() => { if (inTauri) void getVersion().then(setAppVersion).catch(() => {}); }, [inTauri]);
   useEffect(() => {
-    const theme = settings.theme;
-    const apply = () => { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme; };
-    apply(); const query = matchMedia("(prefers-color-scheme: dark)"); query.addEventListener("change", apply); return () => query.removeEventListener("change", apply);
+    const query = matchMedia("(prefers-color-scheme: dark)");
+    const updateMode = () => setActiveThemeMode(settings.theme === "system" ? (query.matches ? "dark" : "light") : settings.theme);
+    updateMode();
+    query.addEventListener("change", updateMode);
+    return () => query.removeEventListener("change", updateMode);
   }, [settings.theme]);
+  useEffect(() => {
+    const dialog = shortcutsDialogRef.current;
+    if (shortcutsOpen && dialog && !dialog.open) dialog.showModal();
+    else if (!shortcutsOpen && dialog?.open) dialog.close();
+  }, [shortcutsOpen]);
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
     const root = document.querySelector<HTMLElement>(".settings-view");
     if (!root) return;
     const frame = requestAnimationFrame(() => {
-      const rows = Array.from(root.querySelectorAll<HTMLElement>(".pref-row")).flatMap((row) => {
-        const control = row.querySelector<HTMLElement>(":scope > .pref-control");
-        return control ? [{ row, control, child: control.firstElementChild as HTMLElement | null }] : [];
-      });
+      const rows = Array.from(root.querySelectorAll<HTMLElement>(".pref-row"))
+        .filter((row) => !row.closest(".shortcuts-dialog"))
+        .flatMap((row) => {
+          const control = row.querySelector<HTMLElement>(":scope > .pref-control");
+          return control ? [{ row, control, child: control.firstElementChild as HTMLElement | null }] : [];
+        });
       if (!rows.length) return;
       const reference = rows[0].control.getBoundingClientRect();
       const referenceChild = rows[0].child?.getBoundingClientRect();
@@ -151,6 +166,9 @@ export default function Settings() {
     setProxyError(invalid ?? ""); if (!invalid) save("Network", next);
   };
   const reset = (section: Section, keys: (keyof SettingsType)[]) => save(section, Object.fromEntries(keys.map((key) => [key, key === "reduceMotion" ? matchMedia("(prefers-reduced-motion: reduce)").matches : DEFAULT_SETTINGS[key]])) as Partial<SettingsType>);
+  const saveThemeColor = (key: keyof typeof DEFAULT_THEME_COLORS.dark, value: string) => save("Appearance", {
+    themeColors: { ...settings.themeColors, [activeThemeMode]: { ...settings.themeColors[activeThemeMode], [key]: value } },
+  });
   const resetApp = async () => { await updateAutostart(false); const issue = useStore.getState().settingsError; if (issue) { setRowErrors((errors) => ({ ...errors, startWithWindows: issue })); return; } await reset("App", ["startWithWindows", "startMinimized", "closeToTray"]); };
   const setAutostartPreference = async (enabled: boolean) => {
     await updateAutostart(enabled);
@@ -230,13 +248,26 @@ export default function Settings() {
       <SettingRow label="Delete files when removing" error={rowErrors.deleteFilesWhenRemoving} control={<Toggle label="Delete files when removing" checked={settings.deleteFilesWhenRemoving} onChange={(value) => void save("Behavior", { deleteFilesWhenRemoving: value })} />} />
       <SettingRow label="Choose torrent files before starting" error={rowErrors.chooseFilesBeforeStarting} control={<Toggle label="Choose torrent files before starting" checked={settings.chooseFilesBeforeStarting} onChange={(value) => void save("Behavior", { chooseFilesBeforeStarting: value })} />} />
     </SettingsSection>
-    <SettingsSection title="Appearance" saved={sectionSaved("Appearance")} reset={() => reset("Appearance", ["theme", "compactList", "reduceMotion"])}>
+    <SettingsSection title="Appearance" saved={sectionSaved("Appearance")} reset={() => reset("Appearance", ["theme", "themeColors", "compactList", "reduceMotion"])}>
       <SettingRow label="Theme" error={rowErrors.theme} control={<Choice label="Theme" value={settings.theme} onChange={(value) => void save("Appearance", { theme: value as SettingsType["theme"] })} options={[["system", "System"], ["dark", "Dark"], ["light", "Light"]]} />} />
+      <div className="theme-colors">
+        <div className="theme-colors-head"><span>{activeThemeMode === "dark" ? "Dark mode colors" : "Light mode colors"}</span><Button variant="ghost" onClick={() => void save("Appearance", { themeColors: DEFAULT_THEME_COLORS })}>Reset colors</Button></div>
+        <div className="theme-color-grid">
+          {([
+            ["background", "Background"], ["surface", "Surface"], ["accent", "Accent"],
+            ["text", "Text"], ["download", "Download"], ["upload", "Upload"],
+          ] as const).map(([key, label]) => <label className="theme-color" key={key}>
+            <span>{label}</span>
+            <input type="color" aria-label={`${activeThemeMode} mode ${label} color`} value={settings.themeColors[activeThemeMode][key]} onChange={(event) => void saveThemeColor(key, event.target.value)} />
+            <code>{settings.themeColors[activeThemeMode][key]}</code>
+          </label>)}
+        </div>
+      </div>
       <SettingRow label="Compact list" error={rowErrors.compactList} control={<Toggle label="Compact list" checked={settings.compactList} onChange={(value) => void save("Appearance", { compactList: value })} />} />
       <SettingRow label="Reduce motion" error={rowErrors.reduceMotion} control={<Toggle label="Reduce motion" checked={settings.reduceMotion} onChange={(value) => void save("Appearance", { reduceMotion: value })} />} />
     </SettingsSection>
     <SettingsSection title="Keyboard shortcuts" saved={sectionSaved("Keyboard shortcuts")} reset={() => reset("Keyboard shortcuts", ["keyBindings"])}>
-      <KeyboardShortcuts bindings={settings.keyBindings} onChange={(keyBindings) => save("Keyboard shortcuts", { keyBindings })} error={rowErrors.keyBindings} />
+      <SettingRow label="Keyboard shortcuts" description="Change the keys used for common actions." control={<Button variant="secondary" onClick={() => setShortcutsOpen(true)}>Configure…</Button>} />
     </SettingsSection>
     {inTauri && <SettingsSection title="App" saved={sectionSaved("App")} reset={() => void resetApp()}>
       <SettingRow label="Start with Windows" error={rowErrors.startWithWindows} control={<Toggle label="Start with Windows" checked={settings.startWithWindows} onChange={(value) => void setAutostartPreference(value)} />} />
@@ -258,6 +289,11 @@ export default function Settings() {
       {updateProgress !== undefined && <div className="pref-row"><div className="pref-label"><small>{updateProgress.toLocaleString()} bytes downloaded</small></div></div>}
       {rowErrors.licenses && <div className="pref-panel-error" role="alert">{rowErrors.licenses}</div>}
     </SettingsSection>
+    <dialog ref={shortcutsDialogRef} className="shortcuts-dialog" aria-labelledby="shortcuts-title" onCancel={(event) => { event.preventDefault(); setShortcutsOpen(false); }} onClose={() => setShortcutsOpen(false)}>
+      <header><div><div className="lbl">KEYBOARD</div><h2 id="shortcuts-title">Shortcuts</h2></div><button type="button" className="modal-close" aria-label="Close shortcuts" onClick={() => setShortcutsOpen(false)}>×</button></header>
+      <div className="shortcuts-dialog-content"><KeyboardShortcuts bindings={settings.keyBindings} onChange={(keyBindings) => save("Keyboard shortcuts", { keyBindings })} error={rowErrors.keyBindings} /></div>
+      <footer><span>Changes save automatically</span><Button variant="secondary" onClick={() => setShortcutsOpen(false)}>Done</Button></footer>
+    </dialog>
     {resetAll && <div ref={resetBackdropRef} className="pref-confirm"><section ref={resetDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="reset-all-title"><p id="reset-all-title">Reset all preferences?</p><div><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); setNotifications(false); void (async () => { if (inTauri) await updateAutostart(false); await update({ ...DEFAULT_SETTINGS, reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }); })(); }}>Reset all settings</Button></div></section></div>}
     {developerConsole && <DeveloperConsole onClose={closeDeveloperConsole} />}
     <span className="sr-only" aria-live="polite">{savedSection ? `${savedSection} saved` : ""}</span>

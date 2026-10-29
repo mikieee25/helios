@@ -10,6 +10,7 @@
   --chip: #1b1b23;
   --seg: #2b2b44;
   --cy: #4cc3f0;
+  --download: #4cc3f0;
   --error: #f87171;
   --status-seeding: #a66bf0;
   --status-completed: #4ade80;
@@ -35,6 +36,7 @@
   --chip: #eceef4;
   --seg: #d9ddf0;
   --cy: #1397cc;
+  --download: #1397cc;
   --error: #dc2626;
   --status-seeding: #702bb8;
   --status-completed: #146d3d;

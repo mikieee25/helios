@@ -28,6 +28,11 @@ export default function KeyboardShortcuts({
     const capture = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (event.key === "Escape") {
+        setCaptureError("");
+        setRecording(undefined);
+        return;
+      }
       const binding = shortcutFromEvent(event);
       if (!binding) {
         setCaptureError("That key cannot be used as a shortcut.");
