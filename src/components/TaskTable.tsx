@@ -201,6 +201,7 @@ const CompletedRow = memo(function CompletedRow({
   task,
   onRemove,
   onReveal,
+  onRevealPath,
   onOpen,
   onContext,
   online,
@@ -209,6 +210,7 @@ const CompletedRow = memo(function CompletedRow({
   task?: Task;
   onRemove(task: Task): void;
   onReveal(task: Task): void;
+  onRevealPath(path: string): void;
   onOpen(path: string): void;
   onContext(event: React.MouseEvent, task: Task): void;
   online: boolean;
@@ -220,34 +222,33 @@ const CompletedRow = memo(function CompletedRow({
       onContextMenu={task ? (event) => onContext(event, task) : undefined}
     >
       <div className="nm">
-        <button
-          className="st"
-          aria-label={`Remove ${entry.name} from history`}
-          onClick={() => void useStore.getState().removeHistory(entry.id)}
-        >
-          <Ic n="x" />
-        </button>
         <span title={entry.name}>{entry.name}</span>
-        {task && (
-          <span className="row-actions">
-            <button
-              className="st"
-              aria-label={`Remove ${task.name}`}
-              disabled={!online}
-              onClick={() => onRemove(task)}
-            >
-              <Ic n="trash" />
-            </button>
-            <button
-              className="st"
-              aria-label={`Show ${task.name} in folder`}
-              disabled={!online || !task.files[0]?.path}
-              onClick={() => onReveal(task)}
-            >
-              <Ic n="reveal" />
-            </button>
-          </span>
-        )}
+        <span className="row-actions">
+          <button
+            className="st"
+            aria-label={`Remove ${entry.name}`}
+            disabled={task ? !online : false}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (task) onRemove(task);
+              else void useStore.getState().removeHistory(entry.id);
+            }}
+          >
+            <Ic n="trash" />
+          </button>
+          <button
+            className="st"
+            aria-label={`Show ${entry.name} in folder`}
+            disabled={!entry.filePath && !task?.files[0]?.path}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (task) onReveal(task);
+              else if (entry.filePath) onRevealPath(entry.filePath);
+            }}
+          >
+            <Ic n="reveal" />
+          </button>
+        </span>
       </div>
       <div>
         <div className="trk">
@@ -621,6 +622,11 @@ export default function TaskTable() {
         throw new Error(
           "aria2 has not provided a file path for this download."
         );
+      await revealItemInDir(path);
+    });
+  const revealPath = (path: string) =>
+    void run(async () => {
+      if (!path) throw new Error("No file path is available for this download.");
       await revealItemInDir(path);
     });
   const openFile = (path: string) =>
@@ -1032,6 +1038,7 @@ export default function TaskTable() {
                         online={online}
                         onRemove={remove}
                         onReveal={reveal}
+                        onRevealPath={revealPath}
                         onOpen={openFile}
                         onContext={context}
                       />

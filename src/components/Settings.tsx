@@ -12,6 +12,7 @@ import { redactDiagnostics } from "@/lib/diagnostics";
 import { installUpdate } from "@/lib/updater";
 import { animateDialogEntrance } from "@/lib/motion";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
+import DeveloperConsole from "@/components/DeveloperConsole";
 
 type BridgeState = { enabled: boolean; port: number; paired: boolean; pairingCode: string | null; pairingExpiresAt: number | null };
 type BridgeClient = { id: string; label: string; createdAt: number; lastUsed: number | null };
@@ -77,6 +78,9 @@ export default function Settings() {
   const [proxy, setProxy] = useState({ proxyMode: settings.proxyMode, proxyUrl: settings.proxyUrl, proxyUser: settings.proxyUser, proxyPassword: settings.proxyPassword, noProxy: settings.noProxy });
   const [proxyError, setProxyError] = useState("");
   const [resetAll, setResetAll] = useState(false);
+  const [developerConsole, setDeveloperConsole] = useState(false);
+  const closeDeveloperConsole = useCallback(() => setDeveloperConsole(false), []);
+  const aboutClicks = useRef({ count: 0, last: 0 });
   const resetBackdropRef = useRef<HTMLDivElement>(null);
   const resetDialogRef = useRef<HTMLElement>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
@@ -95,6 +99,13 @@ export default function Settings() {
     );
   }, [resetAll, settings.reduceMotion]);
   const updateSupported = inTauri && process.env.NODE_ENV === "production";
+  const clickAbout = () => {
+    const now = Date.now();
+    const clicks = aboutClicks.current;
+    clicks.count = now - clicks.last > 1800 ? 1 : clicks.count + 1;
+    clicks.last = now;
+    if (clicks.count >= 5) { clicks.count = 0; setDeveloperConsole(true); }
+  };
   const save = async (section: Section, patch: Partial<SettingsType>) => {
     await update(patch);
     const key = Object.keys(patch)[0];
@@ -241,13 +252,14 @@ export default function Settings() {
       <SettingRow label="Reset all settings" control={<Button variant="danger-outline" className="pref-action-button" onClick={() => setResetAll(true)}>Reset</Button>} />
     </SettingsSection>
     <SettingsSection title="About">
-      <SettingRow label="Helios" description={`Version ${appVersion}`} control={<Button variant="ghost" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</Button>} />
+      <SettingRow label="Helios" onLabelClick={inTauri ? clickAbout : undefined} description={`Version ${appVersion}`} control={<Button variant="ghost" disabled={!inTauri} onClick={() => void invoke("open_licenses").catch(() => setRowErrors((current) => ({ ...current, licenses: "Could not open license notices." })))}>Licenses</Button>} />
       <SettingRow label="aria2-next" description={`Version ${ariaVersion || "—"}`} />
       <SettingRow label="Check for updates" description={updateStatus || (updateSupported ? "Helios checks for updates automatically when it starts." : "Available in installed builds.")} error={rowErrors.updates} control={availableUpdate ? <Button variant="accent" disabled={updateBusy} onClick={() => void installAvailableUpdate()}>{updateBusy ? "Installing…" : `Install ${availableUpdate.version}`}</Button> : <Button variant="secondary" disabled={!updateSupported || updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? "Checking…" : "Check now"}</Button>} />
       {updateProgress !== undefined && <div className="pref-row"><div className="pref-label"><small>{updateProgress.toLocaleString()} bytes downloaded</small></div></div>}
       {rowErrors.licenses && <div className="pref-panel-error" role="alert">{rowErrors.licenses}</div>}
     </SettingsSection>
     {resetAll && <div ref={resetBackdropRef} className="pref-confirm"><section ref={resetDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="reset-all-title"><p id="reset-all-title">Reset all preferences?</p><div><Button variant="secondary" onClick={() => setResetAll(false)}>Cancel</Button><Button variant="danger-ghost" onClick={() => { setResetAll(false); setNotifications(false); void (async () => { if (inTauri) await updateAutostart(false); await update({ ...DEFAULT_SETTINGS, reduceMotion: matchMedia("(prefers-reduced-motion: reduce)").matches }); })(); }}>Reset all settings</Button></div></section></div>}
+    {developerConsole && <DeveloperConsole onClose={closeDeveloperConsole} />}
     <span className="sr-only" aria-live="polite">{savedSection ? `${savedSection} saved` : ""}</span>
   </section>;
 }

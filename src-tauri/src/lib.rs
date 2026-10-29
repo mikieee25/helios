@@ -20,6 +20,7 @@ use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_log::{Target, TargetKind};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -433,12 +434,119 @@ fn get_os_version() -> String {
     os_info::get().to_string()
 }
 
+fn redact_log_message(message: &str) -> String {
+    let mut output = String::with_capacity(message.len());
+    let mut remaining = message;
+    loop {
+        let http = remaining.find("http://");
+        let https = remaining.find("https://");
+        let next = match (http, https) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        let Some(start) = next else { output.push_str(remaining); break; };
+        output.push_str(&remaining[..start]);
+        let url = &remaining[start..];
+        let end = url.find(char::is_whitespace).unwrap_or(url.len());
+        output.push_str("[URL]");
+        remaining = &url[end..];
+    }
+    for key in ["cookie=", "cookie:", "authorization=", "authorization:", "token=", "token:", "password=", "password:"] {
+        let lower = output.to_lowercase();
+        if let Some(start) = lower.find(key) {
+            let value_start = start + key.len();
+            let end = output[value_start..].find(|character: char| character.is_whitespace() || matches!(character, ',' | ';' | '}' | '"' | '\''))
+                .map(|offset| value_start + offset).unwrap_or(output.len());
+            output.replace_range(value_start..end, "[REDACTED]");
+        }
+    }
+    output
+}
+
+fn log_diagnostic(level: log::Level, source: &str, message: &str) {
+    let entry = serde_json::json!({
+        "time": chrono_time(),
+        "level": level.to_string().to_lowercase(),
+        "source": source,
+        "message": redact_log_message(message),
+    });
+    match level {
+        log::Level::Error => log::error!(target: "helios::diagnostics", "{entry}"),
+        log::Level::Warn => log::warn!(target: "helios::diagnostics", "{entry}"),
+        log::Level::Info => log::info!(target: "helios::diagnostics", "{entry}"),
+        log::Level::Debug => log::debug!(target: "helios::diagnostics", "{entry}"),
+        log::Level::Trace => log::trace!(target: "helios::diagnostics", "{entry}"),
+    }
+}
+
+fn chrono_time() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
+fn console_log_files(app: &AppHandle) -> Result<(std::path::PathBuf, Vec<std::path::PathBuf>), String> {
+    let dir = app.path().app_log_dir().map_err(|error| error.to_string())?;
+    let mut files = std::fs::read_dir(&dir).map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("helios") && path.extension().is_some_and(|ext| ext == "log")))
+        .collect::<Vec<_>>();
+    files.sort_by_key(|path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok());
+    Ok((dir, files))
+}
+
+#[tauri::command]
+fn get_console_logs(app: AppHandle) -> Result<Vec<String>, String> {
+    use std::collections::VecDeque;
+    let (_, files) = console_log_files(&app)?;
+    let cleared_at = std::fs::read_to_string(app.path().app_data_dir().map_err(|error| error.to_string())?.join("developer-console-cleared-at"))
+        .ok().and_then(|value| value.parse::<u128>().ok()).unwrap_or(0);
+    let mut lines = VecDeque::with_capacity(3000);
+    for path in files {
+        let contents = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+        for line in contents.lines() {
+            let json_start = line.find('{');
+            let timestamp = json_start.and_then(|start| serde_json::from_str::<serde_json::Value>(&line[start..]).ok())
+                .and_then(|entry| entry.get("time").and_then(serde_json::Value::as_str).and_then(|time| time.parse::<u128>().ok()));
+            if timestamp.is_some_and(|timestamp| timestamp <= cleared_at) { continue; }
+            if lines.len() == 3000 { lines.pop_front(); }
+            lines.push_back(line.to_owned());
+        }
+    }
+    Ok(lines.into())
+}
+
+#[tauri::command]
+fn clear_console_logs(app: AppHandle) -> Result<(), String> {
+    let path = app.path().app_data_dir().map_err(|error| error.to_string())?.join("developer-console-cleared-at");
+    std::fs::create_dir_all(path.parent().ok_or("Invalid log marker path")?).map_err(|error| error.to_string())?;
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?.as_millis();
+    std::fs::write(path, timestamp.to_string()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_console_logs(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(path, contents).map_err(|error| error.to_string())
+}
+
 pub fn run() {
     let pending = PendingOpen(Arc::new(Mutex::new(PendingOpenState::default())));
     let shutting_down = Arc::new(AtomicBool::new(false));
     let setup_shutting_down = shutting_down.clone();
     let callback_pending = pending.clone();
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new()
+            .clear_targets()
+            .target(Target::new(TargetKind::LogDir { file_name: Some("helios".into()) }))
+            .target(Target::new(TargetKind::Webview))
+            .max_file_size(4 * 1024 * 1024)
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+            .level(log::LevelFilter::Info)
+            .build());
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance(move |app, args, _| {
         forward_open_args(app, &callback_pending, &args);
@@ -470,6 +578,7 @@ pub fn run() {
             get_rpc_config,
             bridge::bridge_get_state,
             bridge::bridge_get_timings,
+            bridge::bridge_take_pending_asks,
             bridge::bridge_set_enabled,
             bridge::bridge_start_pairing,
             bridge::bridge_cancel_pairing,
@@ -481,6 +590,9 @@ pub fn run() {
             open_data_folder,
             open_licenses,
             get_os_version,
+            get_console_logs,
+            clear_console_logs,
+            export_console_logs,
             begin_aria_shutdown,
             take_open_requests,
             set_autostart,
@@ -489,6 +601,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             app.manage(pending.clone());
+            log_diagnostic(log::Level::Info, "Helios", "Application started");
             let app_handle = app.handle().clone();
             for argument in std::env::args().skip(1) {
                 if let Some(request) = parse_open_request(&argument) {
@@ -580,9 +693,15 @@ pub fn run() {
                         match event {
                             CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
                                 let output = String::from_utf8_lossy(&bytes);
+                                let trimmed = output.trim();
+                                let lowercase = trimmed.to_lowercase();
+                                if lowercase.contains("error") || lowercase.contains("warn") || lowercase.contains("failed") {
+                                    log_diagnostic(log::Level::Warn, "aria2", trimmed);
+                                }
                                 if rpc_ready_output(&output, port) {
                                     if !listening {
                                         listening = true;
+                                        log_diagnostic(log::Level::Info, "aria2", "RPC listener is ready");
                                         if let Some(tx) = ready_tx.take() { let _ = tx.send(Ok(())); }
                                     }
                                 } else if output.contains("RPC: Failed to bind TCP socket") {
@@ -636,6 +755,7 @@ pub fn run() {
                                 false
                             }).await.unwrap_or(false);
                             if ready && !monitor_shutdown.load(Ordering::SeqCst) {
+                                log_diagnostic(log::Level::Info, "aria2", "aria2-next process recovered");
                                 if let Some(state) = monitor_app.try_state::<Aria>() {
                                     *state.child.lock().unwrap() = Some(replacement_child);
                                     rx = replacement_rx;

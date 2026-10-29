@@ -2,6 +2,19 @@
 
 Notable Helios changes, newest first.
 
+## [0.1.6] - 2026-10-29
+
+### Added
+
+- Added a hidden developer console with Helios, aria2, and browser hand-off logs, filters, copy, and export.
+
+### Fixed
+
+- Kept Firefox **Ask before adding downloads** requests queued until the Add dialog is ready.
+- Matched excluded hosts against both download URLs and their initiating pages.
+- Kept downloads with unknown file sizes in Firefox when a minimum size is configured.
+- Added delete and reveal actions to completed download history.
+
 ## [0.1.5] - 2026-10-29
 
 ### Added
@@ -72,6 +85,7 @@ Notable Helios changes, newest first.
 - Initial Helios desktop release for managing direct downloads and BitTorrent transfers.
 - Torrent file selection, download controls, system tray support, and Windows release packaging.
 
+[0.1.6]: https://github.com/mikieee25/helios/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/mikieee25/helios/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/mikieee25/helios/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/mikieee25/helios/compare/v0.1.2...v0.1.3

@@ -1033,6 +1033,17 @@ svg.i {
 .pref-label .pref-error {
   color: var(--error);
 }
+.pref-label-trigger {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pref-label-trigger:focus-visible {
+  outline: 2px solid var(--cy);
+  outline-offset: 3px;
+}
 .pref-control {
   display: flex;
   width: var(--pref-control-w);
@@ -1574,6 +1585,120 @@ svg.i {
   padding: 24px;
   background: #0009;
   backdrop-filter: blur(4px);
+}
+.developer-console-backdrop {
+  z-index: 80;
+}
+.add-dialog.developer-console {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  width: min(960px, calc(100vw - 24px));
+  height: min(680px, calc(100vh - 24px));
+  min-width: min(480px, calc(100vw - 24px));
+  min-height: min(360px, calc(100vh - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  margin: 0;
+  overflow: auto;
+  resize: both;
+}
+.developer-console-heading {
+  flex: 0 0 auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.developer-console-heading:active {
+  cursor: grabbing;
+}
+.developer-console-heading small {
+  display: block;
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: 11px;
+}
+.developer-console-toolbar,
+.developer-console-actions,
+.developer-console-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.developer-console-toolbar {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+  color: var(--dim);
+  font-size: 12px;
+}
+.developer-console-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.developer-console-toolbar select {
+  max-width: 180px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--row);
+  color: var(--tx);
+}
+.developer-console-toolbar > span {
+  margin-left: auto;
+}
+.developer-console-entries {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--row);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+.developer-log-entry {
+  display: grid;
+  grid-template-columns: 90px 56px minmax(80px, 120px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.developer-log-entry time,
+.developer-log-source {
+  color: var(--dim);
+}
+.developer-log-entry strong {
+  color: var(--cy);
+}
+.developer-log-entry.level-error strong { color: var(--error); }
+.developer-log-entry.level-warn strong { color: var(--warning, #e6a23c); }
+.developer-log-entry p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.developer-console-empty,
+.developer-console-status {
+  color: var(--dim);
+}
+.developer-console-actions {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+.developer-console-actions > div { justify-content: flex-end; }
+@media (max-width: 620px) {
+  .developer-console-toolbar { flex-wrap: wrap; }
+  .developer-log-entry { grid-template-columns: 1fr auto; }
+  .developer-log-entry .developer-log-source { grid-column: 1; }
+  .developer-log-entry p { grid-column: 1 / -1; }
 }
 .modal-backdrop.is-closing {
   pointer-events: none;

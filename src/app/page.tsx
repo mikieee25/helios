@@ -22,6 +22,7 @@ import type { BridgeAddItem } from "@/lib/bridge";
 import { isSupportedDownloadSource } from "@/lib/download-source";
 import { prefersReducedMotion } from "@/lib/motion";
 import { shortcutMatches } from "@/lib/shortcuts";
+import { logDiagnostic } from "@/lib/developer-log";
 
 type SelectionRequest = {
   gid: string;
@@ -37,6 +38,28 @@ export default function Page() {
   const mainContentRef = useRef<HTMLDivElement>(null);
   const previousView = useRef(view);
   const introPlayed = useRef(false);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    const format = (values: unknown[]) => values.map((value) => {
+      if (value instanceof Error) return `${value.name}: ${value.message}${value.stack ? `\n${value.stack}` : ""}`;
+      if (typeof value === "string") return value;
+      try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+    }).join(" ");
+    console.error = (...values) => { originalError(...values); logDiagnostic("error", "Helios", format(values)); };
+    console.warn = (...values) => { originalWarn(...values); logDiagnostic("warn", "Helios", format(values)); };
+    const onError = (event: ErrorEvent) => logDiagnostic("error", "Helios", event.error instanceof Error ? `${event.message}\n${event.error.stack ?? ""}` : event.message);
+    const onRejection = (event: PromiseRejectionEvent) => logDiagnostic("error", "Helios", `Unhandled rejection: ${format([event.reason])}`);
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      console.error = originalError;
+      console.warn = originalWarn;
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
   const [addOpen, setAddOpen] = useState(false);
   const [dropLinks, setDropLinks] = useState<string>();
   const [dropPath, setDropPath] = useState<string>();
@@ -73,6 +96,11 @@ export default function Page() {
     setDropLinks(items.map((item) => item.url).join("\n"));
     setAddOpen(true);
   }, []);
+  const takePendingBridgeAdds = useCallback(async () => {
+    const batches = await invoke<BridgeAddItem[][]>("bridge_take_pending_asks");
+    const items = batches.flat();
+    if (items.length) await openFromBridge(items);
+  }, [openFromBridge]);
   useLayoutEffect(() => {
     if (introPlayed.current) return;
     if (prefersReducedMotion(reduceMotion)) {
@@ -219,9 +247,7 @@ export default function Page() {
           () => void useStore.getState().resumeAll()
         ),
         listen("helios://quit", () => void shutdownAndDestroy()),
-        listen<{ items: BridgeAddItem[] }>("bridge://add", (event) =>
-          void openFromBridge(event.payload.items)
-        ),
+        listen("bridge://add", () => void takePendingBridgeAdds()),
         listen<{ name: string }>("bridge://started", (event) =>
           void useStore.getState().notifyAddedDownload(event.payload.name)
         ),
@@ -232,6 +258,7 @@ export default function Page() {
             return;
           }
           unlistenNative = unlisteners;
+          await takePendingBridgeAdds();
           const startup = await invoke<StartupActions>("take_open_requests");
           startup.requests.forEach(consumeOpenRequest);
           for (const action of startup.actions) {
@@ -259,7 +286,7 @@ export default function Page() {
       window.removeEventListener("paste", onPaste);
       window.removeEventListener("keydown", onShortcut);
     };
-  }, [openFromBridge]);
+  }, [openFromBridge, takePendingBridgeAdds]);
 
   return (
     <div className="win" ref={rootRef}>

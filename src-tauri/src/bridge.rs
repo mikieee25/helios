@@ -23,21 +23,22 @@ const FIRST_PORT: u16 = 16_780;
 const LAST_PORT: u16 = 16_789;
 const MAX_BODY: usize = 256 * 1024;
 const MAX_ITEMS: usize = 100;
+const MAX_PENDING_ASKS: usize = 100;
 const PAIR_LIFETIME: Duration = Duration::from_secs(120);
 const PAIR_LOCKOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BridgeItem {
-    url: String,
+pub struct BridgeItem {
+    pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    referrer: Option<String>,
+    pub referrer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    user_agent: Option<String>,
+    pub user_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    cookie: Option<String>,
+    pub cookie: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    filename: Option<String>,
+    pub filename: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -159,6 +160,7 @@ struct BridgeInner {
     stop: AtomicBool,
     agent: ureq::Agent,
     handoff_timings: Mutex<VecDeque<u64>>,
+    pending_asks: Mutex<VecDeque<Vec<BridgeItem>>>,
 }
 
 pub struct BridgeService {
@@ -204,6 +206,7 @@ impl BridgeService {
                 .try_proxy_from_env(false)
                 .build(),
             handoff_timings: Mutex::new(VecDeque::with_capacity(20)),
+            pending_asks: Mutex::new(VecDeque::new()),
         });
         let worker_server = server.clone();
         let worker_inner = inner.clone();
@@ -244,6 +247,10 @@ impl BridgeService {
         if !enabled {
             self.inner.pairing.lock().unwrap().clear();
         }
+    }
+
+    fn take_pending_asks(&self) -> Vec<Vec<BridgeItem>> {
+        self.inner.pending_asks.lock().unwrap().drain(..).collect()
     }
 
     fn start_pairing(&self) -> Result<BridgeState, String> {
@@ -346,6 +353,11 @@ pub fn bridge_revoke_client(service: State<'_, BridgeService>, id: String) -> Re
 #[tauri::command]
 pub fn bridge_get_timings(service: State<'_, BridgeService>) -> Vec<u64> {
     service.handoff_timings()
+}
+
+#[tauri::command]
+pub fn bridge_take_pending_asks(service: State<'_, BridgeService>) -> Vec<Vec<BridgeItem>> {
+    service.take_pending_asks()
 }
 
 fn handle_request(mut request: Request, inner: &BridgeInner) {
@@ -518,6 +530,7 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                 );
                 return;
             }
+            let item_count = body.items.len();
             let items = match body
                 .items
                 .into_iter()
@@ -537,18 +550,28 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
             };
             match body.mode.as_str() {
                 "ask" => {
-                    if inner
-                        .app
-                        .emit("bridge://add", json!({ "items": items }))
-                        .is_err()
-                    {
+                    let queued = {
+                        let mut pending = inner.pending_asks.lock().unwrap();
+                        if pending.len() >= MAX_PENDING_ASKS {
+                            false
+                        } else {
+                            pending.push_back(items);
+                            true
+                        }
+                    };
+                    if !queued {
+                        super::log_diagnostic(log::Level::Warn, "handoff", "Browser approval queue is full");
                         respond_json(
                             request,
-                            503,
-                            json!({ "error": "Helios is unavailable" }),
+                            429,
+                            json!({ "error": "Helios has too many pending download approvals" }),
                             origin.as_deref(),
                         );
                     } else {
+                        super::log_diagnostic(log::Level::Info, "handoff", &format!("Queued {item_count} browser download(s) for approval"));
+                        // The queue is authoritative. The event only wakes an already-mounted UI;
+                        // requests survive the gap before the frontend listener is ready.
+                        let _ = inner.app.emit("bridge://add", json!({}));
                         respond_json(
                             request,
                             200,
@@ -576,6 +599,7 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                                 );
                             }
                             Ok(_) => {
+                                super::log_diagnostic(log::Level::Error, "handoff", "aria2.addUri response did not contain a GID");
                                 eprintln!("[browser-bridge] aria2.addUri failed: response did not contain a GID");
                                 respond_json(
                                     request,
@@ -586,6 +610,7 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                                 return;
                             }
                             Err(error) => {
+                                super::log_diagnostic(log::Level::Error, "handoff", &format!("aria2.addUri failed: {error}"));
                                 eprintln!("[browser-bridge] aria2.addUri failed: {error}");
                                 respond_json(
                                     request,
@@ -600,6 +625,7 @@ fn handle_request(mut request: Request, inner: &BridgeInner) {
                     let elapsed_ms =
                         request_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
                     record_handoff_timing(&inner.handoff_timings, elapsed_ms);
+                    super::log_diagnostic(log::Level::Info, "handoff", &format!("Handed off {} browser download(s) in {elapsed_ms} ms", gids.len()));
                     let _ = inner.app.emit(
                         "bridge://added",
                         json!({ "gids": gids, "sources": retry_sources }),

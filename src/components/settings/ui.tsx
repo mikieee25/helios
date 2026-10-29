@@ -13,9 +13,9 @@ export function SettingsSection({ title, reset, saved, badge, children, collapsi
   </section>;
 }
 
-export function SettingRow({ label, description, error, disabled, control, children }: { label: string; description?: ReactNode; error?: string; disabled?: boolean; control?: ReactNode; children?: ReactNode }) {
+export function SettingRow({ label, description, error, disabled, control, children, onLabelClick }: { label: string; description?: ReactNode; error?: string; disabled?: boolean; control?: ReactNode; children?: ReactNode; onLabelClick?: () => void }) {
   return <div className={`pref-row${disabled ? " is-disabled" : ""}`}>
-    <div className="pref-label"><span>{label}</span>{description && <small>{description}</small>}{error && <small className="pref-error" role="alert">{error}</small>}</div>
+    <div className="pref-label">{onLabelClick ? <button type="button" className="pref-label-trigger" aria-label={`${label}, activate five times to open developer console`} onClick={onLabelClick}>{label}</button> : <span>{label}</span>}{description && <small>{description}</small>}{error && <small className="pref-error" role="alert">{error}</small>}</div>
     <div className="pref-control"><div className="pref-control-content">{control ?? children}</div></div>
   </div>;
 }
