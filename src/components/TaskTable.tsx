@@ -320,6 +320,7 @@ export default function TaskTable() {
   const anchor = useRef<string | undefined>(undefined);
   const cursor = useRef<string | undefined>(undefined);
   const searchRef = useRef<HTMLInputElement>(null);
+  const selectionBarRef = useRef<HTMLDivElement>(null);
   const previousKinds = useRef(new Map<string, string>());
   const previousSort = useRef("");
   const query = useView((s) => s.query);
@@ -802,6 +803,25 @@ export default function TaskTable() {
     ...confirmHistory.map((entry) => entry.name),
   ];
   const selectionCount = selectedTasks.length + selectedHistory.length;
+  useLayoutEffect(() => {
+    const bar = selectionBarRef.current;
+    if (!bar || prefersReducedMotion(reduceMotion)) return;
+    const tween = gsap.fromTo(
+      bar,
+      { autoAlpha: 0, y: 8 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.22,
+        ease: "power2.out",
+        overwrite: "auto",
+        clearProps: "opacity,visibility,transform",
+      }
+    );
+    return () => {
+      tween.kill();
+    };
+  }, [selectionCount > 0, reduceMotion]);
   const showDetails = (task: Task) => {
     cursor.current = task.gid;
     useStore.getState().select(task.gid);
@@ -975,75 +995,6 @@ export default function TaskTable() {
           onCommit={commitSearch}
         />
       </div>
-      {selectionCount > 0 && (
-        <div
-          className="selection-bar"
-          role="toolbar"
-          aria-label={`${selectionCount} downloads selected`}
-        >
-          <span>{selectionCount} selected</span>
-          {!isHistory && failedSelectedTasks.length > 0 && (
-            <button
-              className="secondary-button"
-              disabled={!online}
-              onClick={() =>
-                void run(async () => {
-                  const results = await Promise.allSettled(
-                    failedSelectedTasks.map((task) =>
-                      useStore.getState().retryTask(task)
-                    )
-                  );
-                  const errors = results.flatMap((result, index) =>
-                    result.status === "rejected"
-                      ? [
-                          `${failedSelectedTasks[index].name}: ${
-                            result.reason instanceof Error
-                              ? result.reason.message
-                              : String(result.reason)
-                          }`,
-                        ]
-                      : []
-                  );
-                  if (errors.length) throw new Error(errors.join("\n"));
-                  setSelected(new Set());
-                })
-              }
-            >
-              {failedSelectedTasks.length === 1 ? "Retry" : "Retry failed"}
-            </button>
-          )}
-          {!isHistory && <>
-            <button
-              className="secondary-button"
-              disabled={!online}
-              onClick={() => runSelection(true)}
-            >
-              {stoppingSeeding ? "Stop seeding" : "Pause"}
-            </button>
-            <button
-              className="secondary-button"
-              disabled={!online}
-              onClick={() => runSelection(false)}
-            >
-              Resume
-            </button>
-          </>}
-          <button
-            className="secondary-button"
-            disabled={!online && removalNeedsConnection}
-            onClick={requestRemoveSelection}
-          >
-            Remove
-          </button>
-          <button
-            className="selection-clear"
-            aria-label="Clear selection"
-            onClick={() => setSelected(new Set())}
-          >
-            ×
-          </button>
-        </div>
-      )}
       <div className="grid" ref={gridRef} style={columnStyle}>
         <div className="row head">
           {COLUMN_LABELS.map((label, index) => {
@@ -1200,6 +1151,76 @@ export default function TaskTable() {
           )}
         </div>
       </div>
+      {selectionCount > 0 && (
+        <div
+          ref={selectionBarRef}
+          className="selection-bar"
+          role="toolbar"
+          aria-label={`${selectionCount} downloads selected`}
+        >
+          <span>{selectionCount} selected</span>
+          {!isHistory && failedSelectedTasks.length > 0 && (
+            <button
+              className="secondary-button"
+              disabled={!online}
+              onClick={() =>
+                void run(async () => {
+                  const results = await Promise.allSettled(
+                    failedSelectedTasks.map((task) =>
+                      useStore.getState().retryTask(task)
+                    )
+                  );
+                  const errors = results.flatMap((result, index) =>
+                    result.status === "rejected"
+                      ? [
+                          `${failedSelectedTasks[index].name}: ${
+                            result.reason instanceof Error
+                              ? result.reason.message
+                              : String(result.reason)
+                          }`,
+                        ]
+                      : []
+                  );
+                  if (errors.length) throw new Error(errors.join("\n"));
+                  setSelected(new Set());
+                })
+              }
+            >
+              {failedSelectedTasks.length === 1 ? "Retry" : "Retry failed"}
+            </button>
+          )}
+          {!isHistory && <>
+            <button
+              className="secondary-button"
+              disabled={!online}
+              onClick={() => runSelection(true)}
+            >
+              {stoppingSeeding ? "Stop seeding" : "Pause"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!online}
+              onClick={() => runSelection(false)}
+            >
+              Resume
+            </button>
+          </>}
+          <button
+            className="secondary-button"
+            disabled={!online && removalNeedsConnection}
+            onClick={requestRemoveSelection}
+          >
+            Remove
+          </button>
+          <button
+            className="selection-clear"
+            aria-label="Clear selection"
+            onClick={() => setSelected(new Set())}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {actionError && (
         <div className="table-error" role="alert">
           <span>{actionError}</span>

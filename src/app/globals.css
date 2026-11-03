@@ -373,7 +373,8 @@ svg.i {
   outline: none;
 }
 .row.sel {
-  background: var(--sel);
+  background: color-mix(in srgb, var(--cy) 24%, var(--row));
+  box-shadow: inset 2px 0 var(--cy);
 }
 .row.pa {
   color: var(--dim);
@@ -1576,7 +1577,8 @@ svg.i {
 }
 .selection-bar {
   min-height: 42px;
-  margin: 0 4px 8px;
+  flex: none;
+  margin: 8px 4px 0;
   padding: 4px 10px;
   border: 1px solid var(--line);
   border-radius: 9px;
