@@ -6,6 +6,7 @@ import { LogLevel } from "@tauri-apps/plugin-log";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { parseConsoleEntry, type ConsoleEntry } from "@/lib/developer-log";
+import { useStore } from "@/lib/store";
 import { Button } from "@/components/settings/ui";
 
 type Level = "all" | "info" | "warn" | "error";
@@ -15,9 +16,13 @@ export default function DeveloperConsole({ onClose }: { onClose: () => void }) {
   const [level, setLevel] = useState<Level>("all");
   const [source, setSource] = useState("all");
   const [error, setError] = useState("");
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const captureEnabled = useStore((state) => state.httpCaptureEnabled);
+  const setHttpCapture = useStore((state) => state.setHttpCapture);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | undefined>(undefined);
+  const captureMounted = useRef(true);
 
   const startDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest("button, select, input")) return;
@@ -70,6 +75,16 @@ export default function DeveloperConsole({ onClose }: { onClose: () => void }) {
     return () => { active = false; detach?.(); window.removeEventListener("keydown", onKeyDown); };
   }, [onClose]);
 
+  useEffect(() => {
+    captureMounted.current = true;
+    return () => {
+      captureMounted.current = false;
+      if (useStore.getState().httpCaptureEnabled) {
+        void useStore.getState().setHttpCapture(false).catch(() => {});
+      }
+    };
+  }, []);
+
   const sources = useMemo(() => [...new Set(entries.map((entry) => entry.source))].sort(), [entries]);
   const visible = entries.filter((entry) => (level === "all" || entry.level === level) && (source === "all" || entry.source === source));
   const text = entries.map((entry) => `${new Date(Number(entry.time) || entry.time).toISOString()} [${entry.level.toUpperCase()}] [${entry.source}] ${entry.message}`).join("\n");
@@ -88,6 +103,18 @@ export default function DeveloperConsole({ onClose }: { onClose: () => void }) {
     try { await invoke("clear_console_logs"); setEntries([]); setError(""); }
     catch { setError("Could not clear saved logs."); }
   };
+  const toggleCapture = async () => {
+    setCaptureBusy(true);
+    setError("");
+    try {
+      await setHttpCapture(!captureEnabled);
+      if (!captureMounted.current && useStore.getState().httpCaptureEnabled) {
+        await useStore.getState().setHttpCapture(false);
+      }
+    }
+    catch (cause) { if (captureMounted.current) setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { if (captureMounted.current) setCaptureBusy(false); }
+  };
 
   return <div className="modal-backdrop developer-console-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} className="add-dialog developer-console" role="dialog" aria-modal="true" aria-labelledby="developer-console-title">
@@ -95,8 +122,10 @@ export default function DeveloperConsole({ onClose }: { onClose: () => void }) {
       <div className="developer-console-toolbar">
         <label>Level <select value={level} onChange={(event) => setLevel(event.target.value as Level)}><option value="all">All</option><option value="info">Info</option><option value="warn">Warning</option><option value="error">Error</option></select></label>
         <label>Source <select value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <Button variant={captureEnabled ? "accent" : "secondary"} aria-pressed={captureEnabled} disabled={captureBusy} onClick={() => void toggleCapture()}>{captureBusy ? "Starting…" : captureEnabled ? "Stop HTTP capture" : "Capture HTTP"}</Button>
         <span>{visible.length} entries</span>
       </div>
+      <p className="developer-console-hint">HTTP capture records new response details while enabled. Credentials, cookies, and URLs are redacted.</p>
       <div className="developer-console-entries" role="log" aria-live="polite">
         {visible.length ? visible.map((entry, index) => <article className={`developer-log-entry level-${entry.level}`} key={`${entry.time}-${index}`}>
           <time>{new Date(Number(entry.time) || entry.time).toLocaleTimeString()}</time><strong>{entry.level.toUpperCase()}</strong><span className="developer-log-source">{entry.source}</span><p>{entry.message}</p>

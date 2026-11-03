@@ -28,6 +28,7 @@ import SearchBox from "./SearchBox";
 import { useView, type SortKey } from "@/lib/view-state";
 import { applyRowView } from "@/lib/row-view";
 import { removeTasks } from "@/lib/remove-undo";
+import { logDiagnostic } from "@/lib/developer-log";
 import { useToast } from "@/lib/toast";
 import { shortcutMatches } from "@/lib/shortcuts";
 
@@ -628,13 +629,20 @@ export default function TaskTable() {
   useEffect(() => {
     if (!online) setMenu(undefined);
   }, [online]);
+  useEffect(() => {
+    if (!actionError) return;
+    const timeout = window.setTimeout(() => setActionError(""), 5_000);
+    return () => window.clearTimeout(timeout);
+  }, [actionError]);
 
   async function run(action: () => Promise<unknown>) {
     setActionError("");
     try {
       await action();
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setActionError(message);
+      logDiagnostic("error", "Download action", message);
     }
     setMenu(undefined);
   }
@@ -1194,7 +1202,14 @@ export default function TaskTable() {
       </div>
       {actionError && (
         <div className="table-error" role="alert">
-          {actionError}
+          <span>{actionError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={() => setActionError("")}
+          >
+            ×
+          </button>
         </div>
       )}
       {menu && online && (

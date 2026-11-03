@@ -1691,8 +1691,23 @@ svg.i {
   background: var(--sel);
 }
 .table-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin: 8px 4px;
   color: var(--error);
+}
+.table-error button {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
 }
 .modal-backdrop {
   position: fixed;
@@ -1767,6 +1782,12 @@ svg.i {
 }
 .developer-console-toolbar > span {
   margin-left: auto;
+}
+.developer-console-hint {
+  flex: 0 0 auto;
+  margin: -4px 0 8px;
+  color: var(--dim);
+  font-size: 11px;
 }
 .developer-console-entries {
   flex: 1 1 auto;

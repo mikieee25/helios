@@ -18,6 +18,7 @@ import {
   type TorrentFile,
 } from "./torrent-files";
 import { redactDiagnostics } from "./diagnostics";
+import { logDiagnostic } from "./developer-log";
 import { reconcileTaskSnapshot } from "./task-snapshot";
 import { taskActionForAria2Status } from "./task-actions";
 import { clampShortcutBindings, type ShortcutBindings } from "./shortcuts";
@@ -165,8 +166,10 @@ const recentDiagnosticErrors: string[] = [];
 const notifiedFailures = new Set<string>();
 export function getRecentDiagnosticErrors() { return [...recentDiagnosticErrors]; }
 function recordDiagnosticError(error: unknown) {
-  recentDiagnosticErrors.push(redactDiagnostics(error instanceof Error ? error.message : String(error)));
+  const message = redactDiagnostics(error instanceof Error ? error.message : String(error));
+  recentDiagnosticErrors.push(message);
   if (recentDiagnosticErrors.length > 20) recentDiagnosticErrors.shift();
+  logDiagnostic("error", "Helios", message);
 }
 export const N = 48;
 export const ARIA2_URL =
@@ -211,6 +214,7 @@ interface S {
   settingsError?: string;
   dl: number;
   up: number;
+  httpCaptureEnabled: boolean;
   dlHist: number[];
   upHist: number[];
   start(): Promise<void>;
@@ -253,6 +257,7 @@ interface S {
   setQueuePriority(gid: string, priority: QueuePriority): Promise<void>;
   pauseAll(): Promise<void>;
   resumeAll(): Promise<void>;
+  setHttpCapture(enabled: boolean): Promise<void>;
 }
 
 let api: Aria2 | undefined;
@@ -264,6 +269,9 @@ export async function getAria2Version(): Promise<string> {
 let rpcSecret = BROWSER_SECRET;
 let starting: Promise<void> | undefined;
 let busy = false;
+let lastTrayTooltip = "";
+let trayTooltipUpdatePending = false;
+let trayTooltipErrorLogged = false;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let shutdownRequested = false;
 let shutdownPromise: Promise<void> | undefined;
@@ -283,6 +291,15 @@ const pendingCompletions = new Set<string>();
 const completing = new Set<string>();
 const persistedSeedGids = new Set<string>();
 const savedTorrentCompletionGids = new Set<string>();
+const slowDiagnosticSince = new Map<string, { since: number; lastLogged: number }>();
+const SLOW_DOWNLOAD_BYTES_PER_SECOND = 128 * 1024;
+const SLOW_DIAGNOSTIC_AFTER_MS = 30_000;
+const SLOW_DIAGNOSTIC_INTERVAL_MS = 60_000;
+function describeTaskState(task: Task) {
+  return task.queued
+    ? "waiting in queue"
+    : ({ dl: "downloading", pa: "paused", seed: "seeding", done: "completed", err: "failed" } as const)[task.state];
+}
 const pendingRemovalGids = new Set<string>();
 const same = (a: Task, b: Task) =>
   (Object.keys(a) as (keyof Task)[]).every((k) =>
@@ -481,9 +498,9 @@ export const useStore = create<S>((set, get) => {
         optionsFor(settings, aria2DefaultDir)
       );
       set({ settingsError: undefined });
-    } catch {
+    } catch (error) {
       set({ settingsError: "aria2 could not apply these settings." });
-      recordDiagnosticError("aria2 could not apply preferences");
+      recordDiagnosticError(`aria2 could not apply preferences: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -580,6 +597,40 @@ export const useStore = create<S>((set, get) => {
         [...taskByGid.values()],
         shouldFetchStopped
       );
+      const now = Date.now();
+      for (const task of tasks) {
+        const previous = old.get(task.gid);
+        if (!previous && ["dl", "pa", "err"].includes(task.state)) {
+          logDiagnostic(
+            task.state === "err" ? "error" : "info",
+            "Download",
+            `${task.name} [${task.gid}] appeared in aria2 as ${describeTaskState(task)}${task.errorCode ? `; error ${task.errorCode}` : ""}${task.errorMessage ? `: ${task.errorMessage}` : ""}`
+          );
+        } else if (previous && (previous.state !== task.state || previous.queued !== task.queued)) {
+          logDiagnostic(
+            task.state === "err" ? "error" : "info",
+            "Download",
+            `Observed aria2 state change for ${task.name} [${task.gid}]: ${describeTaskState(previous)} -> ${describeTaskState(task)}; speed=${task.speed} B/s; connections=${task.peers}; seeds=${task.seeds}${task.errorCode ? `; error ${task.errorCode}` : ""}${task.errorMessage ? `: ${task.errorMessage}` : ""}`
+          );
+        }
+        if (task.state !== "dl" || task.speed >= SLOW_DOWNLOAD_BYTES_PER_SECOND) {
+          slowDiagnosticSince.delete(task.gid);
+          continue;
+        }
+        const slow = slowDiagnosticSince.get(task.gid) ?? { since: now, lastLogged: 0 };
+        if (now - slow.since >= SLOW_DIAGNOSTIC_AFTER_MS && now - slow.lastLogged >= SLOW_DIAGNOSTIC_INTERVAL_MS) {
+          logDiagnostic(
+            "warn",
+            "Download",
+            `Low-speed sample for ${task.name} [${task.gid}]: ${task.speed} B/s for ${Math.round((now - slow.since) / 1000)}s; downloaded=${Math.round(task.done * task.size)}/${task.size} B (${(task.done * 100).toFixed(1)}%); connections=${task.peers}; seeds=${task.seeds}; stalled=${task.stalled}; configured-limit=${get().settings.maxDownloadMB || "unlimited"} MB/s; connections-per-server=${get().settings.connectionsPerServer}`
+          );
+          slow.lastLogged = now;
+        }
+        slowDiagnosticSince.set(task.gid, slow);
+      }
+      for (const gid of slowDiagnosticSince.keys()) {
+        if (!activeGids.has(gid)) slowDiagnosticSince.delete(gid);
+      }
       const visibleGids = new Set(tasks.map((task) => task.gid));
       for (const gid of pendingRemovalGids) {
         if (!visibleGids.has(gid)) pendingRemovalGids.delete(gid);
@@ -634,6 +685,25 @@ export const useStore = create<S>((set, get) => {
       const g = r[statIndex][0];
       const { dlHist, upHist } = get();
       clock.t = performance.now();
+      const activeDownloads = tasks.filter((task) => task.state === "dl").length;
+      const trayTooltip = `Helios | ${activeDownloads} downloading | ↓ ${(+g.downloadSpeed / 1048576).toFixed(1)} MB/s | ↑ ${(+g.uploadSpeed / 1048576).toFixed(1)} MB/s`;
+      if (inTauri() && trayTooltip !== lastTrayTooltip && !trayTooltipUpdatePending) {
+        trayTooltipUpdatePending = true;
+        void invoke("set_tray_tooltip", { tooltip: trayTooltip })
+          .then(() => {
+            lastTrayTooltip = trayTooltip;
+            trayTooltipErrorLogged = false;
+          })
+          .catch((error) => {
+            if (!trayTooltipErrorLogged) {
+              recordDiagnosticError(`Could not update tray tooltip: ${error instanceof Error ? error.message : String(error)}`);
+              trayTooltipErrorLogged = true;
+            }
+          })
+          .finally(() => {
+            trayTooltipUpdatePending = false;
+          });
+      }
       set({
         tasks: tasks.filter((task) => !pendingRemovalGids.has(task.gid)),
         dl: +g.downloadSpeed,
@@ -642,8 +712,8 @@ export const useStore = create<S>((set, get) => {
         upHist: [...upHist.slice(1), +g.uploadSpeed / 1048576],
       });
       flushCompletions(tasks);
-    } catch {
-      if (!shutdownRequested) recordDiagnosticError("Download engine RPC request failed");
+    } catch (error) {
+      if (!shutdownRequested) recordDiagnosticError(`Download engine RPC request failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       busy = false;
     }
@@ -831,6 +901,11 @@ export const useStore = create<S>((set, get) => {
       (online) => {
         set({ online, ...(online ? { connectedOnce: true } : {}) });
         if (online && !shutdownRequested) {
+          if (get().httpCaptureEnabled) {
+            void api?.call("changeGlobalOption", { log: "-", "log-level": "info" }).catch((error) =>
+              recordDiagnosticError(`Could not resume HTTP response capture: ${error instanceof Error ? error.message : String(error)}`)
+            );
+          }
           void api?.call<{ version?: string }>("getVersion").then((version) => set({ ariaVersion: version.version ?? "unknown" })).catch(() => {});
           void applySettings().then(() => refresh());
         }
@@ -861,6 +936,7 @@ export const useStore = create<S>((set, get) => {
     settings: DEFAULT_SETTINGS,
     dl: 0,
     up: 0,
+    httpCaptureEnabled: false,
     dlHist: Array(N + 1).fill(0),
     upHist: Array(N + 1).fill(0),
     start() {
@@ -1037,7 +1113,12 @@ export const useStore = create<S>((set, get) => {
           ["status"]
         );
         const method = taskActionForAria2Status(status);
-        if (method) await api.call(method, t.gid);
+        if (method) {
+          const action = method === "pause" ? "Pause" : "Resume";
+          logDiagnostic("info", "Download", `${action} requested for ${t.name} [${t.gid}]`);
+          await api.call(method, t.gid);
+          logDiagnostic("info", "Download", `${action} command accepted for ${t.name} [${t.gid}]`);
+        }
         if (t.state === "seed" && method === "pause") {
           await saveCompletion({ ...t, state: "done", done: 1 }, false);
           await api.call("saveSession");
@@ -1049,6 +1130,7 @@ export const useStore = create<S>((set, get) => {
           !message.includes("cannot be unpaused now") &&
           !message.includes("not found")
         ) {
+          recordDiagnosticError(`Could not pause or resume ${t.name} [${t.gid}]: ${error instanceof Error ? error.message : String(error)}`);
           throw error;
         }
       } finally {
@@ -1058,29 +1140,53 @@ export const useStore = create<S>((set, get) => {
     async pauseAll() {
       if (!api) return;
       try {
+        logDiagnostic("info", "Download", "Pause all requested");
         await api.call("pauseAll");
+        logDiagnostic("info", "Download", "Pause all command accepted");
         void refresh(true);
       } catch (error) {
-        recordDiagnosticError("Could not pause all downloads");
+        recordDiagnosticError(`Could not pause all downloads: ${error instanceof Error ? error.message : String(error)}`);
         console.error("Could not pause all downloads.", error);
       }
     },
     async resumeAll() {
       if (!api) return;
       try {
+        logDiagnostic("info", "Download", "Resume all requested");
         await api.call("unpauseAll");
+        logDiagnostic("info", "Download", "Resume all command accepted");
         void refresh(true);
       } catch (error) {
-        recordDiagnosticError("Could not resume all downloads");
+        recordDiagnosticError(`Could not resume all downloads: ${error instanceof Error ? error.message : String(error)}`);
         console.error("Could not resume all downloads.", error);
       }
+    },
+    async setHttpCapture(enabled) {
+      if (enabled === get().httpCaptureEnabled) return;
+      if (!inTauri()) throw new Error("HTTP capture is available in the desktop app only.");
+      if (enabled) {
+        if (!api) throw new Error("aria2 is not connected; HTTP capture could not be changed.");
+        await invoke("set_http_capture_active", { enabled: true });
+        try {
+          await api.call("changeGlobalOption", { log: "-", "log-level": "info" });
+        } catch (error) {
+          await invoke("set_http_capture_active", { enabled: false }).catch(() => {});
+          throw error;
+        }
+      } else {
+        set({ httpCaptureEnabled: false });
+        await invoke("set_http_capture_active", { enabled: false }).catch(() => {});
+        if (api) await api.call("changeGlobalOption", { log: "", "log-level": "notice" });
+      }
+      set({ httpCaptureEnabled: enabled });
+      logDiagnostic("info", "aria2-http", `HTTP response capture ${enabled ? "enabled; only new requests will be captured" : "disabled"}`);
     },
     add(uri) {
       api
         ?.call<string>("addUri", [uri])
         .then((gid) => rememberRetrySource(gid, { kind: "uris", uris: [uri] }))
         .then(() => refresh(true))
-        .catch(() => {});
+        .catch((error) => recordDiagnosticError(`aria2.addUri failed: ${error instanceof Error ? error.message : String(error)}`));
     },
     async addUris(uris, options = {}) {
       if (!api) return uris.map(() => "aria2 is not connected");
@@ -1091,7 +1197,9 @@ export const useStore = create<S>((set, get) => {
             await rememberRetrySource(gid, { kind: "uris", uris: [uri] });
             return "";
           } catch (error) {
-            return error instanceof Error ? error.message : String(error);
+            const message = error instanceof Error ? error.message : String(error);
+            recordDiagnosticError(`aria2.addUri failed: ${message}`);
+            return message;
           }
         })
       );
@@ -1100,16 +1208,26 @@ export const useStore = create<S>((set, get) => {
     },
     async addUri(uri, options = {}) {
       if (!api) throw new Error("aria2 is not connected");
-      const gid = await api.call<string>("addUri", [uri], options);
-      await rememberRetrySource(gid, { kind: "uris", uris: [uri] });
-      void refresh(true);
-      return gid;
+      try {
+        const gid = await api.call<string>("addUri", [uri], options);
+        await rememberRetrySource(gid, { kind: "uris", uris: [uri] });
+        void refresh(true);
+        return gid;
+      } catch (error) {
+        recordDiagnosticError(`aria2.addUri failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
     },
     async addTorrent(torrent, options = {}) {
       if (!api) throw new Error("aria2 is not connected");
-      const gid = await api.call<string>("addTorrent", torrent, [], options);
-      void refresh(true);
-      return gid;
+      try {
+        const gid = await api.call<string>("addTorrent", torrent, [], options);
+        void refresh(true);
+        return gid;
+      } catch (error) {
+        recordDiagnosticError(`aria2.addTorrent failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
     },
     async torrentFiles(gid) {
       if (!api) throw new Error("aria2 is not connected");

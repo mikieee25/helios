@@ -14,7 +14,7 @@ use std::{
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, RunEvent, State, Url,
 };
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
@@ -31,7 +31,60 @@ use tauri_plugin_single_instance::init as single_instance;
 struct Aria {
     child: Mutex<Option<CommandChild>>,
     shutting_down: Arc<AtomicBool>,
+    http_capture_active: Arc<AtomicBool>,
     _job: aria_lifecycle::SharedAriaJob,
+}
+
+#[tauri::command]
+fn set_http_capture_active(enabled: bool, aria: State<'_, Aria>) {
+    aria.http_capture_active.store(enabled, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn set_tray_tooltip(tooltip: String, tray: State<'_, TrayIcon>) -> Result<(), String> {
+    tray.set_tooltip(Some(tooltip)).map_err(|error| error.to_string())
+}
+
+fn is_http_response_log_line(line: &str) -> bool {
+    let line = line.trim();
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("response received:") {
+        return true;
+    }
+    let mut fields = line.split_whitespace().peekable();
+    while let Some(field) = fields.next() {
+        if field.get(..5).is_some_and(|prefix| prefix.eq_ignore_ascii_case("HTTP/"))
+            && fields.peek().is_some_and(|status| {
+                status.len() == 3 && status.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            return true;
+        }
+    }
+    [
+        "accept-ranges:", "content-disposition:", "content-encoding:",
+        "content-length:", "content-range:", "content-type:", "date:",
+        "etag:", "last-modified:", "location:", "retry-after:", "server:",
+        "transfer-encoding:",
+    ]
+    .iter()
+    .any(|header| lower.starts_with(header))
+}
+
+fn log_aria_process_output(output: &str, http_capture_active: &AtomicBool) {
+    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let lowercase = line.to_ascii_lowercase();
+        if lowercase.contains("error") || lowercase.contains("warn") || lowercase.contains("failed") {
+            log_diagnostic(log::Level::Warn, "aria2", line);
+        } else if ["download paused", "download resumed", "download aborted", "download started"]
+            .iter()
+            .any(|event| lowercase.contains(event))
+        {
+            log_diagnostic(log::Level::Info, "aria2", line);
+        } else if http_capture_active.load(Ordering::SeqCst) && is_http_response_log_line(line) {
+            log_diagnostic(log::Level::Info, "aria2-http", line);
+        }
+    }
 }
 
 fn aria2_args(
@@ -255,6 +308,7 @@ fn build_tray(app: &mut tauri::App, pending: PendingOpen) -> tauri::Result<()> {
     let tray_pending = pending.clone();
     let tray = TrayIconBuilder::new()
         .menu(&menu)
+        .tooltip("Helios")
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => show_window(app),
@@ -437,8 +491,24 @@ fn get_os_version() -> String {
 }
 
 fn redact_log_message(message: &str) -> String {
-    let mut output = String::with_capacity(message.len());
-    let mut remaining = message;
+    let sanitized_headers = message
+        .lines()
+        .map(|line| {
+            let lower = line.trim_start().to_ascii_lowercase();
+            if ["cookie:", "set-cookie:", "authorization:", "proxy-authorization:", "www-authenticate:", "x-api-key:"]
+                .iter()
+                .any(|header| lower.starts_with(header))
+            {
+                let prefix_len = line.len() - line.trim_start().len();
+                format!("{}{}: [REDACTED]", &line[..prefix_len], line.trim_start().split(':').next().unwrap_or("header"))
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut output = String::with_capacity(sanitized_headers.len());
+    let mut remaining = sanitized_headers.as_str();
     loop {
         let http = remaining.find("http://");
         let https = remaining.find("https://");
@@ -539,6 +609,7 @@ pub fn run() {
     let pending = PendingOpen(Arc::new(Mutex::new(PendingOpenState::default())));
     let shutting_down = Arc::new(AtomicBool::new(false));
     let setup_shutting_down = shutting_down.clone();
+    let setup_http_capture_active = Arc::new(AtomicBool::new(false));
     let callback_pending = pending.clone();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new()
@@ -599,6 +670,8 @@ pub fn run() {
             open_data_folder,
             open_licenses,
             get_os_version,
+            set_http_capture_active,
+            set_tray_tooltip,
             get_console_logs,
             clear_console_logs,
             export_console_logs,
@@ -704,6 +777,7 @@ pub fn run() {
                 let (armed_tx, armed_rx) = tokio::sync::oneshot::channel();
                 let monitor_app = app.handle().clone();
                 let monitor_shutdown = setup_shutting_down.clone();
+                let monitor_http_capture_active = setup_http_capture_active.clone();
                 let monitor_session = s.clone();
                 let monitor_state_dir = state_path.clone();
                 let monitor_dir = dir.clone();
@@ -718,11 +792,7 @@ pub fn run() {
                         match event {
                             CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
                                 let output = String::from_utf8_lossy(&bytes);
-                                let trimmed = output.trim();
-                                let lowercase = trimmed.to_lowercase();
-                                if lowercase.contains("error") || lowercase.contains("warn") || lowercase.contains("failed") {
-                                    log_diagnostic(log::Level::Warn, "aria2", trimmed);
-                                }
+                                log_aria_process_output(&output, &monitor_http_capture_active);
                                 if rpc_ready_output(&output, port) {
                                     if !listening {
                                         listening = true;
@@ -776,8 +846,11 @@ pub fn run() {
                             let ready = tokio::time::timeout(Duration::from_secs(5), async {
                                 while let Some(event) = replacement_rx.recv().await {
                                     match event {
-                                        CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes)
-                                            if rpc_ready_output(&String::from_utf8_lossy(&bytes), port) => return true,
+                                        CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
+                                            let output = String::from_utf8_lossy(&bytes);
+                                            log_aria_process_output(&output, &monitor_http_capture_active);
+                                            if rpc_ready_output(&output, port) { return true; }
+                                        }
                                         CommandEvent::Terminated(_) => return false,
                                         _ => {}
                                     }
@@ -830,7 +903,7 @@ pub fn run() {
                     .blocking_show();
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, message).into());
             };
-            app.manage(Aria { child: Mutex::new(Some(child)), shutting_down: setup_shutting_down.clone(), _job: aria_job });
+            app.manage(Aria { child: Mutex::new(Some(child)), shutting_down: setup_shutting_down.clone(), http_capture_active: setup_http_capture_active.clone(), _job: aria_job });
             app.manage(RpcConfig { port, secret: secret.clone() });
             let bridge = bridge::BridgeService::start(
                 app_handle.clone(),

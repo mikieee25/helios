@@ -7,11 +7,14 @@ Notable Helios changes, newest first.
 ### Improved
 
 - Restored the v0.1.7 codebase as the baseline following reported download-speed regression in later versions.
+- Added copyable HTTP response capture, download state-change diagnostics, and throttled low-speed snapshots to the developer console.
+- Added a tray hover tooltip with active download count and current download/upload speeds.
 
 ### Fixed
 
 - Saved the Notifications switch across application restarts.
 - Made completed downloads selectable by row, Select All, and keyboard selection shortcuts.
+- Automatically dismissed download action errors after five seconds and added a close button.
 
 ## [0.1.9] - 2026-11-02
 
