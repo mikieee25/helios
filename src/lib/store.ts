@@ -11,6 +11,7 @@ import * as historyStore from "./history";
 import type { HistoryEntry } from "./history";
 import { dominantCategory, fileCategory, type FileCategory } from "./format";
 import { readValue, writeValue } from "./persistence";
+import { useToast } from "./toast";
 import {
   isTorrentFileSelected,
   selectionTotals,
@@ -219,7 +220,7 @@ interface S {
   select(g: string): void;
   setSeries(s: "dl" | "ul"): void;
   setView(v: "tasks" | "settings"): void;
-  setNotify(v: boolean): void;
+  setNotify(v: boolean): Promise<void>;
   notifyAddedDownload(name: string): Promise<void>;
   updateSettings(settings: Partial<Settings>): Promise<void>;
   updateAutostart(enabled: boolean): Promise<void>;
@@ -738,13 +739,14 @@ export const useStore = create<S>((set, get) => {
   }
 
   async function initialize() {
-    const [history, settings, legacyChooseFiles, storedRetrySources, storedQueuePriorities] =
+    const [history, settings, legacyChooseFiles, storedRetrySources, storedQueuePriorities, notificationsEnabled] =
       await Promise.all([
         historyStore.load(),
         readValue<Partial<Settings>>("settings", {}),
         readValue<boolean>("chooseFilesBeforeStarting", false),
         readValue<RetrySourceMap>("retrySources", {}),
         readValue<Record<string, QueuePriority>>("queuePriorities", {}),
+        readValue<boolean>("notificationsEnabled", false),
       ]);
     retrySources =
       storedRetrySources && typeof storedRetrySources === "object"
@@ -772,6 +774,7 @@ export const useStore = create<S>((set, get) => {
     set({
       history,
       settings: loadedSettings,
+      notify: notificationsEnabled,
       ready: true,
     });
     let url = ARIA2_URL;
@@ -882,7 +885,15 @@ export const useStore = create<S>((set, get) => {
     select: (sel) => set({ sel }),
     setSeries: (series) => set({ series }),
     setView: (view) => set({ view }),
-    setNotify(notify) {
+    async setNotify(notify) {
+      try {
+        await writeValue("notificationsEnabled", notify);
+      } catch (error) {
+        recordDiagnosticError("Could not save notification preference");
+        console.error("Could not save notification preference.", error);
+        useToast.getState().show({ message: "Could not save notification preference." });
+        return;
+      }
       set({ notify });
       if (!notify) return;
       if (inTauri())

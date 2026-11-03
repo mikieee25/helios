@@ -228,6 +228,8 @@ const CompletedRow = memo(function CompletedRow({
   onReveal,
   onRevealPath,
   onOpen,
+  sel,
+  onSelect,
   onContext,
   online,
 }: {
@@ -237,12 +239,15 @@ const CompletedRow = memo(function CompletedRow({
   onReveal(task: Task): void;
   onRevealPath(path: string): void;
   onOpen(path: string): void;
+  sel: boolean;
+  onSelect(id: string, event: ReactMouseEvent): void;
   onContext(event: React.MouseEvent, task: Task): void;
   online: boolean;
 }) {
   return (
     <div
-      className="row done"
+      className={`row done${sel ? " sel" : ""}`}
+      onClick={(event) => onSelect(entry.id, event)}
       onDoubleClick={() => onOpen(entry.filePath || task?.files[0]?.path || "")}
       onContextMenu={task ? (event) => onContext(event, task) : undefined}
     >
@@ -294,6 +299,7 @@ export default function TaskTable() {
   const [actionError, setActionError] = useState("");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirmTasks, setConfirmTasks] = useState<Task[]>([]);
+  const [confirmHistory, setConfirmHistory] = useState<HistoryEntry[]>([]);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [offlineTimedOut, setOfflineTimedOut] = useState(false);
   const [retryVersion, setRetryVersion] = useState(0);
@@ -324,8 +330,6 @@ export default function TaskTable() {
   const online = useStore((s) => s.online);
   const reduceMotion = useStore((s) => s.settings.reduceMotion);
   const compactList = useStore((s) => s.settings.compactList);
-  const confirmBeforeRemoving = useStore((s) => s.settings.confirmBeforeRemoving);
-  const deleteFilesByDefault = useStore((s) => s.settings.deleteFilesWhenRemoving);
   const connectedOnce = useStore((s) => s.connectedOnce);
   const ready = useStore((s) => s.ready);
   const rpcUrl = useStore((s) => s.rpcUrl);
@@ -434,17 +438,34 @@ export default function TaskTable() {
         row.kind === "task"
     )
     .map((row) => row.task);
+  const historyRows = rows
+    .filter(
+      (row): row is Extract<OverviewRow, { kind: "history" }> =>
+        row.kind === "history"
+    )
+    .map((row) => row.entry);
   const selectedTasks = taskRows.filter((task) => selected.has(task.gid));
+  const selectedHistory = historyRows.filter((entry) => selected.has(entry.id));
+  const selectedHistoryTasks = selectedHistory
+    .map((entry) => tasks.find((task) => task.gid === entry.id))
+    .filter((task): task is Task => Boolean(task));
+  const historyOnlySelected = selectedHistory.filter(
+    (entry) => !selectedHistoryTasks.some((task) => task.gid === entry.id)
+  );
+  const removalNeedsConnection =
+    selectedTasks.length > 0 || selectedHistoryTasks.length > 0;
   const stoppingSeeding =
     selectedTasks.length > 0 &&
     selectedTasks.every((task) => task.state === "seed");
   const failedSelectedTasks = selectedTasks.filter(
     (task) => task.state === "err"
   );
-  const taskRowsRef = useRef(taskRows);
   const selectedTasksRef = useRef(selectedTasks);
-  taskRowsRef.current = taskRows;
+  const rowsRef = useRef(rows);
+  const selectedHistoryRef = useRef(selectedHistory);
   selectedTasksRef.current = selectedTasks;
+  rowsRef.current = rows;
+  selectedHistoryRef.current = selectedHistory;
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -618,24 +639,38 @@ export default function TaskTable() {
     setMenu(undefined);
   }
 
-  const requestRemoval = (items: Task[]) => {
-    if (!items.length) return;
-    if (confirmBeforeRemoving) {
+  const requestRemoval = (items: Task[], historyItems: HistoryEntry[] = []) => {
+    if (!items.length && !historyItems.length) return;
+    if (useStore.getState().settings.confirmBeforeRemoving && items.length) {
       setConfirmTasks(items);
-      setDeleteFiles(deleteFilesByDefault);
+      setConfirmHistory(historyItems);
+      setDeleteFiles(useStore.getState().settings.deleteFilesWhenRemoving);
       return;
     }
     void run(async () => {
       setSelected(new Set());
-      await removeTasks(items, deleteFilesByDefault);
+      if (items.length)
+        await removeTasks(
+          items,
+          useStore.getState().settings.deleteFilesWhenRemoving
+        );
+      await Promise.all(
+        historyItems.map((entry) => useStore.getState().removeHistory(entry.id))
+      );
     });
   };
 
   const remove = (task: Task) => requestRemoval([task]);
   const requestRemoveSelection = () => {
-    if (!online || !selectedTasks.length) return;
-    requestRemoval(selectedTasks);
+    const tasksToRemove = [...new Map(
+      [...selectedTasks, ...selectedHistoryTasks].map(
+        (task): [string, Task] => [task.gid, task]
+      )
+    ).values()];
+    requestRemoval(tasksToRemove, historyOnlySelected);
   };
+  const requestRemoveSelectionRef = useRef(requestRemoveSelection);
+  requestRemoveSelectionRef.current = requestRemoveSelection;
   const retry = (task: Task) =>
     void run(() => useStore.getState().retryTask(task));
   const reconnect = (task: Task) =>
@@ -665,14 +700,15 @@ export default function TaskTable() {
       await invoke("open_download_file", { path });
     });
   const open = (task: Task) => openFile(task.files[0]?.path ?? "");
-  const selectRow = (gid: string, event: ReactMouseEvent) => {
-    cursor.current = gid;
-    const index = taskRows.findIndex((task) => task.gid === gid);
-    const anchorIndex = anchor.current
-      ? taskRows.findIndex((task) => task.gid === anchor.current)
-      : index;
+  const selectRow = (id: string, event: ReactMouseEvent) => {
+    cursor.current = id;
+    const visibleIds = rows.map((row) =>
+      row.kind === "task" ? row.task.gid : row.entry.id
+    );
+    const index = visibleIds.indexOf(id);
+    const anchorIndex = anchor.current ? visibleIds.indexOf(anchor.current) : index;
     if (event.shiftKey && index >= 0 && anchorIndex >= 0) {
-      const range = taskRows.slice(
+      const range = visibleIds.slice(
         Math.min(index, anchorIndex),
         Math.max(index, anchorIndex) + 1
       );
@@ -680,23 +716,23 @@ export default function TaskTable() {
         (current) =>
           new Set(
             event.ctrlKey || event.metaKey
-              ? [...current, ...range.map((task) => task.gid)]
-              : range.map((task) => task.gid)
+              ? [...current, ...range]
+              : range
           )
       );
     } else if (event.ctrlKey || event.metaKey) {
       setSelected((current) => {
         const next = new Set(current);
-        if (next.has(gid)) next.delete(gid);
-        else next.add(gid);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
         return next;
       });
-      anchor.current = gid;
+      anchor.current = id;
     } else {
-      setSelected(new Set([gid]));
-      anchor.current = gid;
+      setSelected(new Set([id]));
+      anchor.current = id;
     }
-    useStore.getState().select(gid);
+    useStore.getState().select(id);
   };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -707,21 +743,24 @@ export default function TaskTable() {
           /INPUT|TEXTAREA|SELECT/.test(target.tagName))
       )
         return;
-      if (isHistory) return;
       if (shortcutMatches(event, "selectAll", useStore.getState().settings.keyBindings)) {
         event.preventDefault();
-        const visible = taskRowsRef.current;
-        setSelected(new Set(visible.map((task) => task.gid)));
-        anchor.current = visible[0]?.gid;
-      } else if (shortcutMatches(event, "removeSelected", useStore.getState().settings.keyBindings) && selectedTasksRef.current.length) {
-        if (!online) return;
+        const visible = rowsRef.current.map((row) =>
+          row.kind === "task" ? row.task.gid : row.entry.id
+        );
+        setSelected(new Set(visible));
+        anchor.current = visible[0];
+      } else if (
+        shortcutMatches(event, "removeSelected", useStore.getState().settings.keyBindings) &&
+        (selectedTasksRef.current.length || selectedHistoryRef.current.length)
+      ) {
         event.preventDefault();
-        requestRemoval(selectedTasksRef.current);
+        requestRemoveSelectionRef.current();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isHistory, online]);
+  }, []);
   const runSelection = (paused: boolean) =>
     void run(async () => {
       await Promise.all(
@@ -737,10 +776,24 @@ export default function TaskTable() {
   const confirmRemove = () =>
     void run(async () => {
       const items = confirmTasks;
+      const historyItems = confirmHistory;
       setConfirmTasks([]);
+      setConfirmHistory([]);
       setSelected(new Set());
-      await removeTasks(items, deleteFiles);
+      if (items.length) await removeTasks(items, deleteFiles);
+      await Promise.all(
+        historyItems.map((entry) => useStore.getState().removeHistory(entry.id))
+      );
     });
+  const cancelRemoval = () => {
+    setConfirmTasks([]);
+    setConfirmHistory([]);
+  };
+  const confirmNames = [
+    ...confirmTasks.map((task) => task.name),
+    ...confirmHistory.map((entry) => entry.name),
+  ];
+  const selectionCount = selectedTasks.length + selectedHistory.length;
   const showDetails = (task: Task) => {
     cursor.current = task.gid;
     useStore.getState().select(task.gid);
@@ -914,14 +967,14 @@ export default function TaskTable() {
           onCommit={commitSearch}
         />
       </div>
-      {selectedTasks.length > 0 && !isHistory && (
+      {selectionCount > 0 && (
         <div
           className="selection-bar"
           role="toolbar"
-          aria-label={`${selectedTasks.length} downloads selected`}
+          aria-label={`${selectionCount} downloads selected`}
         >
-          <span>{selectedTasks.length} selected</span>
-          {failedSelectedTasks.length > 0 && (
+          <span>{selectionCount} selected</span>
+          {!isHistory && failedSelectedTasks.length > 0 && (
             <button
               className="secondary-button"
               disabled={!online}
@@ -951,23 +1004,25 @@ export default function TaskTable() {
               {failedSelectedTasks.length === 1 ? "Retry" : "Retry failed"}
             </button>
           )}
+          {!isHistory && <>
+            <button
+              className="secondary-button"
+              disabled={!online}
+              onClick={() => runSelection(true)}
+            >
+              {stoppingSeeding ? "Stop seeding" : "Pause"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!online}
+              onClick={() => runSelection(false)}
+            >
+              Resume
+            </button>
+          </>}
           <button
             className="secondary-button"
-            disabled={!online}
-            onClick={() => runSelection(true)}
-          >
-            {stoppingSeeding ? "Stop seeding" : "Pause"}
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!online}
-            onClick={() => runSelection(false)}
-          >
-            Resume
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!online}
+            disabled={!online && removalNeedsConnection}
             onClick={requestRemoveSelection}
           >
             Remove
@@ -1062,6 +1117,12 @@ export default function TaskTable() {
                       <CompletedRow
                         entry={row.entry}
                         task={tasks.find((task) => task.gid === row.entry.id)}
+                        sel={
+                          selected.size
+                            ? selected.has(row.entry.id)
+                            : row.entry.id === sel
+                        }
+                        onSelect={selectRow}
                         online={online}
                         onRemove={remove}
                         onReveal={reveal}
@@ -1256,7 +1317,7 @@ export default function TaskTable() {
           ref={confirmBackdropRef}
           className="modal-backdrop"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setConfirmTasks([]);
+            if (event.target === event.currentTarget) cancelRemoval();
           }}
         >
           <section
@@ -1271,27 +1332,30 @@ export default function TaskTable() {
                 <div className="lbl">REMOVE DOWNLOAD</div>
                 <h2 id="remove-title">
                   Remove{" "}
-                  {confirmTasks.length === 1
-                    ? confirmTasks[0].name
-                    : `${confirmTasks.length} downloads`}
+                  {confirmNames.length === 1
+                    ? confirmNames[0]
+                    : `${confirmNames.length} downloads`}
                   ?
                 </h2>
               </div>
               <button
                 className="modal-close"
                 aria-label="Close"
-                onClick={() => setConfirmTasks([])}
+                onClick={cancelRemoval}
               >
                 ×
               </button>
             </div>
-            {confirmTasks.length > 1 && (
+            {confirmNames.length > 1 && (
               <div className="remove-list">
                 {confirmTasks.slice(0, 5).map((task) => (
                   <div key={task.gid}>{task.name}</div>
                 ))}
-                {confirmTasks.length > 5 && (
-                  <div>and {confirmTasks.length - 5} more</div>
+                {confirmHistory.slice(0, Math.max(0, 5 - confirmTasks.length)).map((entry) => (
+                  <div key={entry.id}>{entry.name}</div>
+                ))}
+                {confirmNames.length > 5 && (
+                  <div>and {confirmNames.length - 5} more</div>
                 )}
               </div>
             )}
@@ -1306,7 +1370,7 @@ export default function TaskTable() {
             <div className="modal-footer">
               <button
                 className="secondary-button"
-                onClick={() => setConfirmTasks([])}
+                onClick={cancelRemoval}
               >
                 Cancel
               </button>

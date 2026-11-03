@@ -2,6 +2,33 @@
 
 Notable Helios changes, newest first.
 
+## [0.2.0] - 2026-11-03
+
+### Improved
+
+- Restored the v0.1.7 codebase as the baseline following reported download-speed regression in later versions.
+
+### Fixed
+
+- Saved the Notifications switch across application restarts.
+- Made completed downloads selectable by row, Select All, and keyboard selection shortcuts.
+
+## [0.1.9] - 2026-11-02
+
+### Added
+
+- Added configurable upload limits and a dashboard action to pause other active transfers in Low Impact mode.
+- Added aria2 CPU, memory, and disk write metrics to the dashboard.
+- Added a control to relearn bandwidth for Automatic download limits.
+
+### Improved
+
+- Reduced repeated refresh work for large download queues; torrent file details now load when the details panel opens.
+
+### Fixed
+
+- Delayed native engine metrics until after hydration and corrected the torrent file type import.
+
 ## [0.1.7] - 2026-10-29
 
 ### Added
@@ -101,6 +128,7 @@ Notable Helios changes, newest first.
 - Initial Helios desktop release for managing direct downloads and BitTorrent transfers.
 - Torrent file selection, download controls, system tray support, and Windows release packaging.
 
+[0.1.9]: https://github.com/mikieee25/helios/compare/v0.1.8...v0.1.9
 [0.1.6]: https://github.com/mikieee25/helios/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/mikieee25/helios/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/mikieee25/helios/compare/v0.1.3...v0.1.4
